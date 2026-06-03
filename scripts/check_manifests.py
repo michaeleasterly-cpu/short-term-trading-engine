@@ -26,14 +26,18 @@ on-disk target):
      a group; groups disjoint) AND every consumer artifact is in sync
      with it:
 
-       * ``.github/workflows/claude-review-heavy-lane.yml`` ``paths:``
-         filter equals ``heavy_lane ∪ claude_system`` exactly.
        * ``.claude/rules/heavy-lane.md`` frontmatter ``paths:`` equals
          ``heavy_lane`` exactly.
        * ``docs/DEV_PIPELINE_STANDARD.md``,
          ``.github/pull_request_template.md``, and
          ``.claude/hooks/session-start.sh`` each contain every
          ``heavy_lane`` path string verbatim.
+
+     The paid heavy-lane Claude review workflow that previously
+     consumed ``heavy_lane ∪ claude_system`` as its ``paths:`` filter
+     was retired 2026-06-03 — the registry's ``claude_system`` group
+     is now consumed only by the path-scoped rules and docs, not by a
+     paid action.
 
   5. C0.3 (2026-06-01) Claude execution-surface contract:
 
@@ -47,11 +51,6 @@ on-disk target):
        * No agent or skill body authorizes auto-merge, auto-fix,
          auto-rebase, force-push, or memstore mutation (negation-
          aware — ``do not auto-merge`` survives the scan).
-       * ``.github/workflows/claude-review-heavy-lane.yml`` declares
-         ``contents: read`` (never ``contents: write``), pins the
-         third-party action to a major tag, and its
-         ``--allowedTools`` argument enumerates no mutating Bash /
-         Edit / Write tool.
 
   5. ``.github/workflows/*.yml`` ``run: python …`` script invocations
      point at files that exist on disk when the invocation is a
@@ -178,25 +177,6 @@ _AGENT_SKILL_FORBIDDEN_REGEXES: tuple[tuple[str, str], ...] = (
     (r"\bauto[- ]?rebase\b", "auto-rebase"),
     (r"\bgit\s+push\s+[^\n]*(--force|-f\s)", "git push --force"),
     (r"/memory_stores/[^\s]+/memories", "memstore API mutation"),
-)
-
-_WORKFLOW_FORBIDDEN_ALLOWED_TOOLS: tuple[str, ...] = (
-    "Bash(gh pr merge",
-    "Bash(git push",
-    "Bash(git commit",
-    "Bash(git rebase",
-    "Bash(git reset",
-    "Bash(docker",
-    "Bash(railway",
-    "Bash(gh api --method PATCH",
-    "Bash(gh api --method POST",
-    "Bash(gh api --method PUT",
-    "Bash(gh api --method DELETE",
-    "Bash(rm ",
-    "Edit",
-    "Write",
-    "MultiEdit",
-    "NotebookEdit",
 )
 
 _NEGATION_WINDOW = 80
@@ -345,59 +325,6 @@ def check_agents_skills_no_forbidden_authorizations() -> list[str]:
                         target,
                         f"authorizes {label} (no negation nearby): "
                         f"{matched!r}",
-                    )
-                )
-    return failures
-
-
-def check_workflow_allowed_tools_read_only() -> list[str]:
-    """``.github/workflows/claude-review-heavy-lane.yml`` must
-    declare ``contents: read``, pin the third-party action to a major
-    tag (not ``@main``), and the ``--allowedTools`` argument must not
-    enumerate any mutating Bash / Edit / Write / MultiEdit /
-    NotebookEdit tool."""
-    failures: list[str] = []
-    workflow = (
-        REPO_ROOT / ".github" / "workflows" / "claude-review-heavy-lane.yml"
-    )
-    if not workflow.exists():
-        return failures
-    src = workflow.read_text(encoding="utf-8")
-    if "contents: write" in src:
-        failures.append(
-            _err(workflow, "grants contents: write — review-only invariant")
-        )
-    if "contents: read" not in src:
-        failures.append(
-            _err(workflow, "missing explicit contents: read")
-        )
-    if "anthropics/claude-code-action@main" in src:
-        failures.append(
-            _err(
-                workflow,
-                "anthropics/claude-code-action pinned to @main — would "
-                "silently shift behavior",
-            )
-        )
-    allowed_lines = [
-        line for line in src.splitlines() if "--allowedTools" in line
-    ]
-    if not allowed_lines:
-        failures.append(
-            _err(
-                workflow,
-                "missing --allowedTools — Claude action would default to "
-                "its full tool set",
-            )
-        )
-    for line in allowed_lines:
-        for forbidden in _WORKFLOW_FORBIDDEN_ALLOWED_TOOLS:
-            if forbidden in line:
-                failures.append(
-                    _err(
-                        workflow,
-                        f"--allowedTools authorizes forbidden tool: "
-                        f"{forbidden!r}",
                     )
                 )
     return failures
@@ -792,47 +719,6 @@ def check_path_registry_schema() -> list[str]:
     return failures
 
 
-def check_workflow_filter_equals_registry_union() -> list[str]:
-    """``.github/workflows/claude-review-heavy-lane.yml`` ``paths:``
-    filter MUST equal exactly ``heavy_lane ∪ claude_system`` from the
-    registry — no missing entries, no extras.
-    """
-    failures: list[str] = []
-    workflow = (
-        REPO_ROOT / ".github" / "workflows" / "claude-review-heavy-lane.yml"
-    )
-    if not workflow.exists():
-        # Workflow adoption is optional; skip silently when absent.
-        return failures
-    data, load_failures = load_registry()
-    failures.extend(load_failures)
-    if data is None:
-        return failures
-    heavy = set(registry_paths(data, "heavy_lane"))
-    claude = set(registry_paths(data, "claude_system"))
-    expected = heavy | claude
-    workflow_text = workflow.read_text(encoding="utf-8")
-    workflow_paths = set(_extract_yaml_paths_list(workflow_text))
-    missing = expected - workflow_paths
-    extras = workflow_paths - expected
-    for p in sorted(missing):
-        failures.append(
-            _err(
-                workflow,
-                f"registry path missing from workflow filter: {p}",
-            )
-        )
-    for p in sorted(extras):
-        failures.append(
-            _err(
-                workflow,
-                f"workflow filter has path not in registry "
-                f"(heavy_lane ∪ claude_system): {p}",
-            )
-        )
-    return failures
-
-
 def check_heavy_lane_rule_frontmatter_equals_registry() -> list[str]:
     """``.claude/rules/heavy-lane.md`` frontmatter ``paths:`` MUST
     equal exactly ``heavy_lane`` from the registry."""
@@ -1079,7 +965,6 @@ def main() -> int:
         )
     )
     all_failures.extend(check_path_registry_schema())
-    all_failures.extend(check_workflow_filter_equals_registry_union())
     all_failures.extend(check_heavy_lane_rule_frontmatter_equals_registry())
     all_failures.extend(check_doc_pipeline_standard_lists_heavy_lane())
     all_failures.extend(check_pr_template_lists_heavy_lane())
@@ -1088,7 +973,6 @@ def main() -> int:
     all_failures.extend(check_hooks_do_not_invoke_forbidden_commands())
     all_failures.extend(check_agents_have_frontmatter_and_body())
     all_failures.extend(check_agents_skills_no_forbidden_authorizations())
-    all_failures.extend(check_workflow_allowed_tools_read_only())
     all_failures.extend(check_vocabulary_pinned_files_present())
     all_failures.extend(check_workflow_script_invocations())
 

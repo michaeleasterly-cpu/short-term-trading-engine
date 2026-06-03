@@ -1,24 +1,25 @@
 # STE Canonical Path Registry — H0 path hardening (2026-06-01)
 #
 # Single source of truth for the path lists previously duplicated
-# across the Claude review workflow filter, the heavy-lane rule
-# frontmatter/body, docs/DEV_PIPELINE_STANDARD.md §0,
+# across the heavy-lane rule frontmatter/body,
+# docs/DEV_PIPELINE_STANDARD.md §0,
 # .github/pull_request_template.md, .claude/hooks/session-start.sh,
-# scripts/check_manifests.py, tests/test_claude_review_workflow_present.py,
-# and tests/test_path_registry_present.py.
+# scripts/check_manifests.py, and tests/test_path_registry_present.py.
 #
 # Consumers:
 #   * scripts/check_manifests.py (validator) — reds CI on drift.
 #   * tests/test_path_registry_present.py (sentinel) — schema +
 #     consumer-presence asserts.
-#   * tests/test_claude_review_workflow_present.py — reads
-#     heavy_lane ∪ claude_system to assert the workflow filter.
+#
+# Note: the paid claude-review-heavy-lane.yml workflow that previously
+# consumed `heavy_lane ∪ claude_system` as its `paths:` filter was
+# retired 2026-06-03 — `claude_system` is now consumed only by
+# path-scoped rules and docs.
 #
 # Adding a new heavy-lane path:
 #   1. Append a {path, why} entry under groups.heavy_lane.paths here.
 #   2. Mirror the entry into .claude/rules/heavy-lane.md frontmatter +
-#      body, .github/workflows/claude-review-heavy-lane.yml `paths:`,
-#      docs/DEV_PIPELINE_STANDARD.md §0,
+#      body, docs/DEV_PIPELINE_STANDARD.md §0,
 #      .github/pull_request_template.md "Touched risk paths", and
 #      .claude/hooks/session-start.sh heredoc.
 #   3. `python scripts/check_manifests.py` must exit 0 (drift sentinel).

@@ -52,35 +52,24 @@ Runs in CI on every push and on every pre-commit hook locally.
 Layer-1 findings are **BLOCKING** by default (CI reds, PR cannot
 merge through normal gates).
 
-### Layer 2 — Claude review (advisory, fresh-context)
+### Layer 2 — Operator gate (with `/security-review` skill as model-invocable assist)
 
-Two sub-paths depending on whether the diff triggers the
-heavy-lane workflow.
+The operator is the dispositive review layer. The
+**model-invocable** `/security-review` skill defined in
+`.claude/skills/security-review/SKILL.md` is the canonical
+model-driven assist — invoked by the operator or by Claude on the
+operator's behalf when a security-sensitive diff (per §2) is
+present. It is review-only and produces a verdict comment string
+(`VERDICT: PASS` / `REQUEST_CHANGES` / `NEEDS_OPERATOR_REVIEW`)
+the operator can paste into the PR.
 
-#### Layer 2a — automatic heavy-lane Claude review
-
-Triggers on the `claude_system ∪ heavy_lane` path filter from
-`.claude/path_registry.yaml` (per `.github/workflows/claude-review-heavy-lane.yml`).
-The Claude Code Action posts a single verdict comment:
-
-- `VERDICT: PASS`
-- `VERDICT: REQUEST_CHANGES`
-- `VERDICT: NEEDS_OPERATOR_REVIEW`
-
-The action runs with `contents: read` + `pull-requests: write`
-permissions only. It must never commit, must never push, must
-never auto-fix, must never auto-merge, and must never deploy.
-C0.3 sentinels pin those invariants.
-
-#### Layer 2b — manual `/security-review` skill
-
-For diffs that are security-sensitive (per §2) but do NOT hit a
-heavy-lane path glob, the operator (or Claude on the operator's
-behalf) invokes the **model-invocable** `/security-review` skill
-defined in `.claude/skills/security-review/SKILL.md`. It runs the
-same 3-layer rubric as 2a but locally in the current session
-instead of in CI. The skill is review-only and produces a verdict
-comment string the operator can paste into the PR.
+The previously deployed paid heavy-lane Claude review workflow
+(`.github/workflows/claude-review-heavy-lane.yml`) was retired
+2026-06-03 — see `docs/audits/2026-06-03-claude-code-workflow-controls.md`
+§12. The subagent profiles + the `/security-review` skill cover
+the same review surface without the per-PR API spend; sentinel
+`tests/test_claude_surface_contract.py::test_paid_claude_review_workflow_absent`
+reds CI if the workflow returns silently.
 
 Layer-2 findings classify as **BLOCKING** /
 **NEEDS_OPERATOR_REVIEW** / **ADVISORY** per §3.
@@ -205,12 +194,9 @@ override memory. The security cascade is no exception.
 ## §6 — Operator quick-reference
 
 - A security-sensitive diff arrived → check that
-  `.github/workflows/secret-scan.yml` and
-  `.github/workflows/claude-review-heavy-lane.yml` both ran (or
-  hit the workflow-validation safeguard, in which case manually
-  invoke the skill).
-- Reviewing the PR → run `/security-review` if the heavy-lane
-  Claude action did not produce a verdict.
+  `.github/workflows/secret-scan.yml` ran (Layer 1, gitleaks).
+- Reviewing the PR → invoke `/security-review` for the Layer-2
+  model-driven assist; the operator remains the final gate.
 - About to admin-override → no **BLOCKING** finding may remain;
   every **NEEDS_OPERATOR_REVIEW** must have a recorded decision.
 - Storing follow-up context → `TODO.md` (tracked) or the per-fact

@@ -1,8 +1,10 @@
 <!--
-  STE PR template. The lane declaration + heavy-lane sections are
-  read by humans AND by .github/workflows/claude-review-heavy-lane.yml.
-  Keep them — the Claude review action and the manual reviewer both
-  rely on this structure.
+  STE PR template. The lane declaration + heavy-lane sections drive
+  the operator's review discipline and the manual subagent-driven
+  split-review.
+
+  (The paid claude-review-heavy-lane.yml workflow that previously
+  consumed this structure was retired 2026-06-03.)
 
   Reference: docs/DEV_PIPELINE_STANDARD.md §0 (lane decision) + §1
   (heavy-lane pipeline).
@@ -26,8 +28,7 @@
 ## Touched risk paths
 
 <!--
-  Check ALL that apply. Any check here forces the heavy lane and
-  triggers .github/workflows/claude-review-heavy-lane.yml. The
+  Check ALL that apply. Any check here forces the heavy lane. The
   canonical heavy-lane path list lives in
   .claude/path_registry.yaml (groups.heavy_lane); this checklist
   mirrors it and is verified by scripts/check_manifests.py.

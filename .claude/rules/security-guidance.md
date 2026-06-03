@@ -31,8 +31,8 @@ This rule is auto-loaded when a diff touches any path in the frontmatter `paths:
 
 ## What to do when this rule fires
 
-1. **Read `docs/SECURITY_GUIDANCE.md` §1 (the 3-layer cascade).** Layer 1 is mechanical (gitleaks + `scripts/check_manifests.py` + the C0.3 + H0 + C0.1 sentinels). Layer 2 is Claude review (automatic via `.github/workflows/claude-review-heavy-lane.yml` for `heavy_lane ∪ claude_system` paths, manual via `/security-review` skill otherwise). Layer 3 is the operator gate.
-2. **Suggest invoking `/security-review` if the heavy-lane workflow did not fire** OR if it hit the `Workflow validation failed` safeguard and produced no verdict. The skill is model-invocable; you can recommend it in chat. Do not invoke deployment commands, do not modify code, do not auto-merge.
+1. **Read `docs/SECURITY_GUIDANCE.md` §1 (the 2-layer cascade).** Layer 1 is mechanical (gitleaks + `scripts/check_manifests.py` + the C0.3 + H0 + C0.1 sentinels). Layer 2 is the operator gate; the manual `/security-review` skill is the model-invocable assist for the operator. (The paid heavy-lane Claude review workflow that previously sat between the two layers was retired 2026-06-03 — see `docs/audits/2026-06-03-claude-code-workflow-controls.md` §12.)
+2. **Suggest invoking `/security-review`** when the path globs above match the diff. The skill is model-invocable; you can recommend it in chat. Do not invoke deployment commands, do not modify code, do not auto-merge.
 3. **Classify findings using the §3 taxonomy**: `BLOCKING` / `NEEDS_OPERATOR_REVIEW` / `ADVISORY`. The aggregate PR verdict equals the most-severe class present.
 
 ## What this rule does NOT authorize
@@ -46,13 +46,12 @@ This rule is advisory. Per-action prohibitions follow; each bullet carries its o
 - Never add or reconfigure MCP servers (out of scope).
 - Never print secret values to chat, PR comments, or any persistent surface — redact before surfacing.
 
-The operator is the dispositive gate. Even a `VERDICT: PASS` from the heavy-lane Claude action or from the `/security-review` skill is necessary but not sufficient for merge — the operator authorizes admin-override or merge through the GitHub UI.
+The operator is the dispositive gate. Even a `VERDICT: PASS` from the `/security-review` skill is necessary but not sufficient for merge — the operator authorizes admin-override or merge through the GitHub UI.
 
 ## Cross-links
 
 - Policy: `docs/SECURITY_GUIDANCE.md`
 - Static checks: gitleaks (`.gitleaks.toml`, `.github/workflows/secret-scan.yml`), `scripts/check_manifests.py`, `tests/test_secret_scan_gate.py`, `tests/test_claude_surface_contract.py`, `tests/test_path_registry_present.py`
-- Auto Claude review: `.github/workflows/claude-review-heavy-lane.yml`
 - Manual review: `.claude/skills/security-review/SKILL.md`
 - Memory boundary (no memory writes during review): `docs/MEMSTORE_HANDOFF.md`
 - Presence sentinel: `tests/test_security_guidance_present.py`

@@ -1,20 +1,20 @@
 """S5 — sentinels for the workflow portability back-ports.
 
-Pins the two narrow patches applied to STE workflows by S5:
+Pins the narrow patch applied to ``.github/workflows/secret-scan.yml``
+by S5:
 
-  * ``.github/workflows/secret-scan.yml``
-    - permissions: contents:read + security-events:write + actions:read
-    - SARIF upload step has ``continue-on-error: true``
-    - gitleaks scan step does NOT have continue-on-error (must remain
-      blocking — that is the gate)
+  * permissions: contents:read + security-events:write + actions:read
+  * SARIF upload step has ``continue-on-error: true``
+  * gitleaks scan step does NOT have continue-on-error (must remain
+    blocking — that is the gate)
 
-  * ``.github/workflows/claude-review-heavy-lane.yml``
-    - ``Gate on ANTHROPIC_API_KEY presence`` step exists
-    - skip-output pattern + notice text
-    - downstream Checkout + Claude action steps guarded with
-      ``if: steps.gate.outputs.skip != 'true'``
-    - allowedTools still restricted; no Edit/Write/MultiEdit/
-      git push/gh pr merge/docker/railway added
+The S5 patches that previously also covered
+``.github/workflows/claude-review-heavy-lane.yml`` (ANTHROPIC_API_KEY
+presence gate, downstream-step guards, allowedTools surface) were
+removed 2026-06-03 alongside the workflow itself. The
+``test_paid_claude_review_workflow_absent`` sentinel in
+``tests/test_claude_surface_contract.py`` is the dispositive guard
+that the workflow stays gone.
 
 Stdlib only.
 """
@@ -25,7 +25,6 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
 _SECRET_SCAN = _REPO / ".github" / "workflows" / "secret-scan.yml"
-_CLAUDE_REVIEW = _REPO / ".github" / "workflows" / "claude-review-heavy-lane.yml"
 
 
 def _read(p: Path) -> str:
@@ -156,151 +155,19 @@ def test_secret_scan_still_pins_gitleaks_version() -> None:
     )
 
 
-# ─────────────────────────────────────────────────────────────────────
-# claude-review-heavy-lane.yml
-# ─────────────────────────────────────────────────────────────────────
-
-
-def test_claude_review_has_anthropic_api_key_gate_step() -> None:
-    text = _read(_CLAUDE_REVIEW)
-    assert "Gate on ANTHROPIC_API_KEY presence" in text, (
-        "claude-review-heavy-lane.yml must add the secret-presence "
-        "gate step (S5 back-port from D2)"
-    )
-    assert "id: gate" in text, (
-        "gate step must declare ``id: gate`` so downstream steps can "
-        "reference its outputs"
-    )
-
-
-def test_claude_review_gate_emits_missing_secret_notice() -> None:
-    text = _read(_CLAUDE_REVIEW)
-    assert "ANTHROPIC_API_KEY secret is not configured" in text, (
-        "gate step must emit the verbatim missing-secret notice "
-        "(see D2 validated copy)"
-    )
-    # And the notice must point at the canonical manual-review fallback.
-    assert "manual fresh-context review discipline" in text, (
-        "missing-secret notice must direct operator to the manual "
-        "heavy-lane review discipline as the dispositive gate"
-    )
-
-
-def test_claude_review_gate_uses_env_secret_pattern() -> None:
-    """Per GitHub Actions: secrets context is not allowed in job-level
-    ``if:`` conditionals, so the standard pattern is to expose
-    ``${{ secrets.ANTHROPIC_API_KEY != '' }}`` via an ``env:`` key on a
-    guard step and check it in shell."""
-    text = _read(_CLAUDE_REVIEW)
-    assert re.search(
-        r"HAS_KEY:\s*\$\{\{\s*secrets\.ANTHROPIC_API_KEY\s*!=\s*''\s*\}\}",
-        text,
-    ), (
-        "gate must read secrets.ANTHROPIC_API_KEY via env: HAS_KEY"
-    )
-    assert re.search(r'skip=true', text) and re.search(r'skip=false', text), (
-        "gate must write both ``skip=true`` and ``skip=false`` outputs"
-    )
-
-
-def test_claude_review_checkout_and_action_steps_are_guarded() -> None:
-    """Downstream steps (Checkout + Claude Code Action) must be
-    conditional on ``steps.gate.outputs.skip != 'true'``, otherwise
-    the gate would emit a notice but the action would still try to
-    run with an empty secret and crash the job."""
-    text = _read(_CLAUDE_REVIEW)
-    # Count occurrences — we expect at least 2 (Checkout + Claude action).
-    pattern = r"if:\s*steps\.gate\.outputs\.skip\s*!=\s*'true'"
-    matches = re.findall(pattern, text)
-    assert len(matches) >= 2, (
-        f"expected at least 2 steps guarded by "
-        f"``if: steps.gate.outputs.skip != 'true'``; got {len(matches)}"
-    )
-
-
-def test_claude_review_allowed_tools_remain_read_only() -> None:
-    """The S5 patch must not broaden the action's tool surface."""
-    text = _read(_CLAUDE_REVIEW)
-    forbidden_tools = (
-        "Bash(git commit",
-        "Bash(git push",
-        "Bash(gh pr create",
-        "Bash(gh pr merge",
-        "Bash(railway",
-        "Bash(docker",
-    )
-    findings: list[str] = []
-    for token in forbidden_tools:
-        if token in text:
-            findings.append(token)
-    assert not findings, (
-        f"claude-review allowedTools must not include mutation surface: "
-        f"{findings}"
-    )
-    # Also defense in depth: Edit/Write/MultiEdit/NotebookEdit must not
-    # appear in any allowedTools list. (They may appear in the prompt
-    # text forbidding them, which is fine — we only check the
-    # ``--allowedTools`` block.)
-    in_allowed = False
-    for raw in text.splitlines():
-        if "--allowedTools" in raw:
-            in_allowed = True
-        if in_allowed:
-            for write_tool in ("Edit,", "Write,", "MultiEdit", "NotebookEdit"):
-                # Only flag if the token is a bare allowedTools entry,
-                # not a Bash() subcommand or a prose mention.
-                stripped = raw.strip()
-                if stripped.endswith('"') and "allowedTools" not in stripped:
-                    # End of the allowedTools value.
-                    break
-                if (
-                    f',{write_tool}' in raw
-                    or f'"{write_tool}' in raw
-                ):
-                    raise AssertionError(
-                        f"allowedTools must not include {write_tool!r}: "
-                        f"line={raw!r}"
-                    )
-            # Heuristic exit: the allowedTools value is a single line
-            # in the YAML block-scalar; one iteration is enough.
-            break
-
-
-def test_claude_review_permissions_remain_minimal() -> None:
-    """The S5 patch did not touch permissions — confirm none of the
-    forbidden write scopes leaked in."""
-    text = _read(_CLAUDE_REVIEW)
-    code = _strip_yaml_comments(text)
-    # Existing baseline (do NOT remove):
-    assert "contents: read" in code, "must keep contents: read"
-    # Newly forbidden writes:
-    forbidden_writes = (
-        "contents: write",
-        "deployments: write",
-        "packages: write",
-        "actions: write",
-    )
-    findings = [t for t in forbidden_writes if t in code]
-    assert not findings, (
-        f"claude-review permissions broadened to forbidden scope(s): "
-        f"{findings}"
-    )
-
-
-def test_no_deployment_commands_introduced() -> None:
-    """Defense in depth across both files — the S5 patch may not
-    introduce any railway/docker/deploy command in either workflow's
+def test_no_deployment_commands_introduced_in_secret_scan() -> None:
+    """Defense in depth on secret-scan.yml — the S5 patch may not
+    introduce any railway/docker/deploy command in the workflow's
     runtime body (comments stripped)."""
-    for path in (_SECRET_SCAN, _CLAUDE_REVIEW):
-        code = _strip_yaml_comments(_read(path))
-        for pat in (
-            r"\brailway\s+up\b",
-            r"\bdocker\s+(?:run|build|compose|exec)\b",
-            r"\bgh\s+pr\s+merge\b",
-            r"\bgit\s+push\s+.*--force\b",
-        ):
-            m = re.search(pat, code, re.IGNORECASE)
-            assert m is None, (
-                f"{path.name} body contains forbidden command: "
-                f"{m.group(0) if m else ''!r}"
-            )
+    code = _strip_yaml_comments(_read(_SECRET_SCAN))
+    for pat in (
+        r"\brailway\s+up\b",
+        r"\bdocker\s+(?:run|build|compose|exec)\b",
+        r"\bgh\s+pr\s+merge\b",
+        r"\bgit\s+push\s+.*--force\b",
+    ):
+        m = re.search(pat, code, re.IGNORECASE)
+        assert m is None, (
+            f"{_SECRET_SCAN.name} body contains forbidden command: "
+            f"{m.group(0) if m else ''!r}"
+        )

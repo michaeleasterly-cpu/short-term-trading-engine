@@ -40,10 +40,9 @@ repos:
   # Local manifest-linter — verifies the .claude extension surface
   # (hooks in settings.json resolve to existing scripts, every skill
   # directory has SKILL.md, rule/agent frontmatter, the heavy-lane
-  # paths in .claude/rules/heavy-lane.md match the workflow filter
-  # in .github/workflows/claude-review-heavy-lane.yml, and the
-  # vocabulary pinned in the presence-sentinel tests is on disk).
-  # Modeled after Anthropic financial-services/scripts/check.py.
+  # paths in .claude/rules/heavy-lane.md match .claude/path_registry.yaml,
+  # and the vocabulary pinned in the presence-sentinel tests is on
+  # disk). Modeled after Anthropic financial-services/scripts/check.py.
   # Sentinel: tests/test_manifest_check_present.py.
   - repo: local
     hooks:
