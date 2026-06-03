@@ -1,0 +1,911 @@
+{
+  "worst_offenders": [
+    {
+      "ticker": "SBET",
+      "classifications": [
+        {
+          "id": "USSZ26OJYYDT98",
+          "cik": "0001981535",
+          "asset_class": "stock",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "US",
+          "current_legal_name": "Sharplink, Inc.",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": "2024-03-31",
+          "last_filing_date": "2026-05-15",
+          "ipo_venue": null
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ26OJYYDT98",
+          "valid_from": "2000-01-03",
+          "valid_to": null
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 5471,
+        "distinct_cls": 1,
+        "first_bar": "2000-01-03",
+        "last_bar": "2026-06-02"
+      },
+      "prices_daily_bars_before_FPFD_attributed_to_active": 4926,
+      "prices_daily_bars_before_FPFD_total": 4926,
+      "fundamentals_quarterly_summary": {
+        "rows": 53,
+        "earliest": "2007-12-31",
+        "latest": "2026-03-31"
+      },
+      "fundamentals_quarterly_rows_before_FPFD": 44
+    },
+    {
+      "ticker": "GLXY",
+      "classifications": [
+        {
+          "id": "USSZ26OMDVD309",
+          "cik": "0001859392",
+          "asset_class": "stock",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "US",
+          "current_legal_name": "Galaxy Digital",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": "2025-03-31",
+          "last_filing_date": "2026-05-28",
+          "ipo_venue": null
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ26OMDVD309",
+          "valid_from": "2011-08-24",
+          "valid_to": null
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 1978,
+        "distinct_cls": 1,
+        "first_bar": "2011-08-24",
+        "last_bar": "2026-06-02"
+      },
+      "prices_daily_bars_before_FPFD_attributed_to_active": 1683,
+      "prices_daily_bars_before_FPFD_total": 1683,
+      "fundamentals_quarterly_summary": {
+        "rows": 52,
+        "earliest": "2006-03-31",
+        "latest": "2026-03-31"
+      },
+      "fundamentals_quarterly_rows_before_FPFD": 47
+    },
+    {
+      "ticker": "COLAU",
+      "classifications": [
+        {
+          "id": "SGUZ26OSJFXT13",
+          "cik": "0002028201",
+          "asset_class": "spac",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "SG",
+          "current_legal_name": "Columbus Acquisition Corp",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": "2025-03-31",
+          "last_filing_date": "2026-06-01",
+          "ipo_venue": null
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "SGUZ26OSJFXT13",
+          "valid_from": "2025-01-23",
+          "valid_to": null
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 341,
+        "distinct_cls": 1,
+        "first_bar": "2025-01-23",
+        "last_bar": "2026-06-02"
+      },
+      "prices_daily_bars_before_FPFD_attributed_to_active": 46,
+      "prices_daily_bars_before_FPFD_total": 46,
+      "fundamentals_quarterly_summary": {
+        "rows": 18,
+        "earliest": "2007-03-31",
+        "latest": "2026-03-31"
+      },
+      "fundamentals_quarterly_rows_before_FPFD": 13
+    },
+    {
+      "ticker": "SUNC",
+      "classifications": [
+        {
+          "id": "USSZ26OC3EMW22",
+          "cik": "0002089661",
+          "asset_class": "stock",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "US",
+          "current_legal_name": "SunocoCorp LLC",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": "2026-03-31",
+          "last_filing_date": "2026-05-07",
+          "ipo_venue": null
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ26OC3EMW22",
+          "valid_from": "2012-03-19",
+          "valid_to": null
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 899,
+        "distinct_cls": 1,
+        "first_bar": "2012-03-19",
+        "last_bar": "2026-06-02"
+      },
+      "prices_daily_bars_before_FPFD_attributed_to_active": 855,
+      "prices_daily_bars_before_FPFD_total": 855,
+      "fundamentals_quarterly_summary": {
+        "rows": 33,
+        "earliest": "2010-09-30",
+        "latest": "2026-03-31"
+      },
+      "fundamentals_quarterly_rows_before_FPFD": 32
+    },
+    {
+      "ticker": "ARDT",
+      "classifications": [
+        {
+          "id": "USSZ26OWWX0M27",
+          "cik": "0001756655",
+          "asset_class": "stock",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "US",
+          "current_legal_name": "Ardent Health Partners, LLC",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": "2024-06-30",
+          "last_filing_date": "2026-05-26",
+          "ipo_venue": null
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ26OWWX0M27",
+          "valid_from": "2024-07-18",
+          "valid_to": null
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 470,
+        "distinct_cls": 1,
+        "first_bar": "2024-07-18",
+        "last_bar": "2026-06-02"
+      },
+      "prices_daily_bars_before_FPFD_attributed_to_active": 0,
+      "prices_daily_bars_before_FPFD_total": 0,
+      "fundamentals_quarterly_summary": {
+        "rows": 22,
+        "earliest": "2015-03-31",
+        "latest": "2026-03-31"
+      },
+      "fundamentals_quarterly_rows_before_FPFD": 14
+    },
+    {
+      "ticker": "LZ",
+      "classifications": [
+        {
+          "id": "USSZ26O9MXNJ04",
+          "cik": "0001286139",
+          "asset_class": "stock",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "US",
+          "current_legal_name": "LegalZoom.com, Inc.",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": "2021-06-30",
+          "last_filing_date": "2026-05-19",
+          "ipo_venue": null
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ26O9MXNJ04",
+          "valid_from": "2011-05-23",
+          "valid_to": null
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 1318,
+        "distinct_cls": 1,
+        "first_bar": "2011-05-23",
+        "last_bar": "2026-06-02"
+      },
+      "prices_daily_bars_before_FPFD_attributed_to_active": 82,
+      "prices_daily_bars_before_FPFD_total": 82,
+      "fundamentals_quarterly_summary": {
+        "rows": 29,
+        "earliest": "2011-03-31",
+        "latest": "2026-03-31"
+      },
+      "fundamentals_quarterly_rows_before_FPFD": 9
+    },
+    {
+      "ticker": "TRAW",
+      "classifications": [
+        {
+          "id": "USUZ26OYQASD06",
+          "cik": "0001130598",
+          "asset_class": "stock",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "US",
+          "current_legal_name": "Traws Pharma, Inc.",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": "2013-06-30",
+          "last_filing_date": "2026-05-29",
+          "ipo_venue": null
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USUZ26OYQASD06",
+          "valid_from": "2013-07-25",
+          "valid_to": null
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 3221,
+        "distinct_cls": 1,
+        "first_bar": "2013-07-25",
+        "last_bar": "2026-06-02"
+      },
+      "prices_daily_bars_before_FPFD_attributed_to_active": 0,
+      "prices_daily_bars_before_FPFD_total": 0,
+      "fundamentals_quarterly_summary": {
+        "rows": 29,
+        "earliest": "2012-06-30",
+        "latest": "2026-03-31"
+      },
+      "fundamentals_quarterly_rows_before_FPFD": 2
+    },
+    {
+      "ticker": "FA",
+      "classifications": [
+        {
+          "id": "USSZ26OW7K0Z34",
+          "cik": "0001210677",
+          "asset_class": "stock",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "US",
+          "current_legal_name": "First Advantage Corporation",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": "2003-03-31",
+          "last_filing_date": "2026-05-13",
+          "ipo_venue": null
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ26OW7K0Z34",
+          "valid_from": "2021-06-23",
+          "valid_to": null
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 1241,
+        "distinct_cls": 1,
+        "first_bar": "2021-06-23",
+        "last_bar": "2026-06-02"
+      },
+      "prices_daily_bars_before_FPFD_attributed_to_active": 0,
+      "prices_daily_bars_before_FPFD_total": 0,
+      "fundamentals_quarterly_summary": {
+        "rows": 43,
+        "earliest": "2005-06-30",
+        "latest": "2026-03-31"
+      },
+      "fundamentals_quarterly_rows_before_FPFD": 0
+    },
+    {
+      "ticker": "VIVK",
+      "classifications": [
+        {
+          "id": "USSZ26OXKZZQ39",
+          "cik": "0001450704",
+          "asset_class": "stock",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "US",
+          "current_legal_name": "Vivakor, Inc.",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": "2009-03-31",
+          "last_filing_date": "2026-05-27",
+          "ipo_venue": null
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ26OXKZZQ39",
+          "valid_from": "2011-05-23",
+          "valid_to": null
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 2619,
+        "distinct_cls": 1,
+        "first_bar": "2011-05-23",
+        "last_bar": "2026-06-02"
+      },
+      "prices_daily_bars_before_FPFD_attributed_to_active": 0,
+      "prices_daily_bars_before_FPFD_total": 0,
+      "fundamentals_quarterly_summary": {
+        "rows": 40,
+        "earliest": "2008-03-31",
+        "latest": "2026-03-31"
+      },
+      "fundamentals_quarterly_rows_before_FPFD": 4
+    },
+    {
+      "ticker": "SUNE",
+      "classifications": [
+        {
+          "id": "USSZ26O86P1W94",
+          "cik": "0000022701",
+          "asset_class": "stock",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "US",
+          "current_legal_name": "SUNation Energy Inc.",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": "2010-06-30",
+          "last_filing_date": "2026-05-15",
+          "ipo_venue": null
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ26O86P1W94",
+          "valid_from": "2000-01-03",
+          "valid_to": null
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 6547,
+        "distinct_cls": 1,
+        "first_bar": "2000-01-03",
+        "last_bar": "2026-06-02"
+      },
+      "prices_daily_bars_before_FPFD_attributed_to_active": 2588,
+      "prices_daily_bars_before_FPFD_total": 2588,
+      "fundamentals_quarterly_summary": {
+        "rows": 42,
+        "earliest": "2010-09-30",
+        "latest": "2026-03-31"
+      },
+      "fundamentals_quarterly_rows_before_FPFD": 0
+    }
+  ],
+  "multi_cls_examples": [
+    {
+      "ticker": "EAGL",
+      "classifications": [
+        {
+          "id": "USEZ26OVBW7006",
+          "cik": null,
+          "asset_class": "etf",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "US",
+          "current_legal_name": "Eagle Capital Select Equity ETF",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": null
+        },
+        {
+          "id": "USSZ13FMP0RE10",
+          "cik": null,
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "Global Eagle Entertainment",
+          "lifetime_start": "2012-01-01",
+          "lifetime_end": "2013-02-04",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        },
+        {
+          "id": "USSZ15FHYG1M79",
+          "cik": null,
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "Videocon D2h Ltd.",
+          "lifetime_start": "2014-01-01",
+          "lifetime_end": "2015-04-01",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        },
+        {
+          "id": "USSZ17F33A9993",
+          "cik": null,
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "Willscot Mobile Mini Holdings Corp.",
+          "lifetime_start": "2016-01-01",
+          "lifetime_end": "2017-12-07",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        },
+        {
+          "id": "USSZ19F4043T10",
+          "cik": null,
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "Target Hospitality Corp.",
+          "lifetime_start": "2018-01-01",
+          "lifetime_end": "2019-03-19",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ13FMP0RE10",
+          "valid_from": "2012-01-01",
+          "valid_to": "2013-02-04"
+        },
+        {
+          "classification_id": "USSZ15FHYG1M79",
+          "valid_from": "2014-01-01",
+          "valid_to": "2015-04-01"
+        },
+        {
+          "classification_id": "USSZ17F33A9993",
+          "valid_from": "2016-01-01",
+          "valid_to": "2017-12-07"
+        },
+        {
+          "classification_id": "USSZ19F4043T10",
+          "valid_from": "2018-01-01",
+          "valid_to": "2019-03-19"
+        },
+        {
+          "classification_id": "USEZ26OVBW7006",
+          "valid_from": "2026-05-23",
+          "valid_to": null
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 0,
+        "distinct_cls": 0,
+        "first_bar": null,
+        "last_bar": null
+      },
+      "fundamentals_quarterly_summary": {
+        "rows": 0,
+        "earliest": null,
+        "latest": null
+      }
+    },
+    {
+      "ticker": "HCACU",
+      "classifications": [
+        {
+          "id": "USUZ26O82NZT87",
+          "cik": "0002079013",
+          "asset_class": "spac",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "US",
+          "current_legal_name": "Hall Chadwick Acquisition Corp.",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": null
+        },
+        {
+          "id": "USSZ14SPYG0E81",
+          "cik": "0002079013",
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.S",
+          "discovery_source": "S",
+          "country": "US",
+          "current_legal_name": "Blue Bird Corp.",
+          "lifetime_start": "2013-01-01",
+          "lifetime_end": "2014-03-25",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        },
+        {
+          "id": "USSZ15FPYG0E34",
+          "cik": "0002079013",
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "Daseke",
+          "lifetime_start": "2014-01-01",
+          "lifetime_end": "2015-10-16",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        },
+        {
+          "id": "USSZ17FPYG0E04",
+          "cik": "0002079013",
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "Nrc Group Holdings Corp.",
+          "lifetime_start": "2016-01-01",
+          "lifetime_end": "2017-08-04",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        },
+        {
+          "id": "USSZ19FPYG0E71",
+          "cik": "0002079013",
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "Canoo",
+          "lifetime_start": "2018-01-01",
+          "lifetime_end": "2019-04-18",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ14SPYG0E81",
+          "valid_from": "2013-01-01",
+          "valid_to": "2014-03-25"
+        },
+        {
+          "classification_id": "USSZ15FPYG0E34",
+          "valid_from": "2014-01-01",
+          "valid_to": "2015-10-16"
+        },
+        {
+          "classification_id": "USUZ26O82NZT87",
+          "valid_from": "2014-01-17",
+          "valid_to": null
+        },
+        {
+          "classification_id": "USSZ17FPYG0E04",
+          "valid_from": "2016-01-01",
+          "valid_to": "2017-08-04"
+        },
+        {
+          "classification_id": "USSZ19FPYG0E71",
+          "valid_from": "2018-01-01",
+          "valid_to": "2019-04-18"
+        }
+      ],
+      "issuer_securities": [
+        {
+          "issuer_id": "CIK0002079013",
+          "classification_id": "USSZ14SPYG0E81",
+          "valid_from": "2013-01-01",
+          "valid_to": "2014-03-25"
+        }
+      ],
+      "prices_daily_summary": {
+        "bars": 1609,
+        "distinct_cls": 1,
+        "first_bar": "2014-01-17",
+        "last_bar": "2026-06-02"
+      },
+      "fundamentals_quarterly_summary": {
+        "rows": 0,
+        "earliest": null,
+        "latest": null
+      }
+    },
+    {
+      "ticker": "HCAC",
+      "classifications": [
+        {
+          "id": "USUZ26OTEH9P55",
+          "cik": "0002079013",
+          "asset_class": "stock",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": null,
+          "current_legal_name": null,
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": "2026-03-31",
+          "last_filing_date": "2026-05-26",
+          "ipo_venue": null
+        },
+        {
+          "id": "USSZ15SPYG0E66",
+          "cik": "0002079013",
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.S",
+          "discovery_source": "S",
+          "country": "US",
+          "current_legal_name": "Blue Bird Corp.",
+          "lifetime_start": "2014-01-01",
+          "lifetime_end": "2015-02-25",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        },
+        {
+          "id": "USSZ18FPYG0E86",
+          "cik": "0002079013",
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "Nrc Group Holdings Corp.",
+          "lifetime_start": "2017-01-01",
+          "lifetime_end": "2018-10-22",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        },
+        {
+          "id": "USSZ20FPYG0E56",
+          "cik": "0002079013",
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "Canoo",
+          "lifetime_start": "2019-01-01",
+          "lifetime_end": "2020-12-22",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ15SPYG0E66",
+          "valid_from": "2014-01-01",
+          "valid_to": "2015-02-25"
+        },
+        {
+          "classification_id": "USUZ26OTEH9P55",
+          "valid_from": "2014-03-20",
+          "valid_to": null
+        },
+        {
+          "classification_id": "USSZ18FPYG0E86",
+          "valid_from": "2017-01-01",
+          "valid_to": "2018-10-22"
+        },
+        {
+          "classification_id": "USSZ20FPYG0E56",
+          "valid_from": "2019-01-01",
+          "valid_to": "2020-12-22"
+        }
+      ],
+      "issuer_securities": [
+        {
+          "issuer_id": "CIK0002079013",
+          "classification_id": "USSZ15SPYG0E66",
+          "valid_from": "2014-01-01",
+          "valid_to": "2015-02-25"
+        }
+      ],
+      "prices_daily_summary": {
+        "bars": 1486,
+        "distinct_cls": 1,
+        "first_bar": "2014-03-20",
+        "last_bar": "2026-05-22"
+      },
+      "prices_daily_bars_before_FPFD_attributed_to_active": 1448,
+      "prices_daily_bars_before_FPFD_total": 1448,
+      "fundamentals_quarterly_summary": {
+        "rows": 2,
+        "earliest": "2019-06-30",
+        "latest": "2019-09-30"
+      },
+      "fundamentals_quarterly_rows_before_FPFD": 2
+    },
+    {
+      "ticker": "ABP",
+      "classifications": [
+        {
+          "id": "USSQ26FHJG4P65",
+          "cik": "0001893219",
+          "asset_class": "stock",
+          "source": "parent_resolver_backfill",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "Abpro Corporation",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": "2026-04-06",
+          "first_public_filing_date": "2022-03-31",
+          "last_filing_date": "2026-05-20",
+          "ipo_venue": "Q"
+        },
+        {
+          "id": "USSZ08F546S914",
+          "cik": null,
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "Abraxas Petroleum Corp.",
+          "lifetime_start": "2007-01-01",
+          "lifetime_end": "2008-05-30",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        },
+        {
+          "id": "USSZ26FPBEM112",
+          "cik": null,
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "ABPRO HOLDINGS INC",
+          "lifetime_start": "2025-01-01",
+          "lifetime_end": "2026-02-23",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ08F546S914",
+          "valid_from": "2007-01-01",
+          "valid_to": "2008-05-30"
+        },
+        {
+          "classification_id": "USSQ26FHJG4P65",
+          "valid_from": "2024-11-12",
+          "valid_to": "2026-04-06"
+        },
+        {
+          "classification_id": "USSZ26FPBEM112",
+          "valid_from": "2025-01-01",
+          "valid_to": "2026-02-23"
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 348,
+        "distinct_cls": 1,
+        "first_bar": "2024-11-12",
+        "last_bar": "2026-04-06"
+      },
+      "fundamentals_quarterly_summary": {
+        "rows": 0,
+        "earliest": null,
+        "latest": null
+      }
+    },
+    {
+      "ticker": "ACT",
+      "classifications": [
+        {
+          "id": "USSZ26OW4ED905",
+          "cik": "0001823529",
+          "asset_class": "stock",
+          "source": "alpaca_name",
+          "discovery_source": null,
+          "country": "US",
+          "current_legal_name": "Enact Holdings, Inc.",
+          "lifetime_start": "1900-01-01",
+          "lifetime_end": null,
+          "first_public_filing_date": "2021-09-30",
+          "last_filing_date": "2026-06-01",
+          "ipo_venue": null
+        },
+        {
+          "id": "USSZ15F0BGC605",
+          "cik": null,
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "Allergan PLC",
+          "lifetime_start": "2014-01-01",
+          "lifetime_end": "2015-06-15",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        },
+        {
+          "id": "USSZ20F15K9757",
+          "cik": null,
+          "asset_class": "stock",
+          "source": "symbol_history_evidence_backfill.F",
+          "discovery_source": "F",
+          "country": "US",
+          "current_legal_name": "AdvisorShares Vice ETF",
+          "lifetime_start": "2019-01-01",
+          "lifetime_end": "2020-11-02",
+          "first_public_filing_date": null,
+          "last_filing_date": null,
+          "ipo_venue": "Z"
+        }
+      ],
+      "ticker_history": [
+        {
+          "classification_id": "USSZ26OW4ED905",
+          "valid_from": "2007-10-19",
+          "valid_to": null
+        },
+        {
+          "classification_id": "USSZ15F0BGC605",
+          "valid_from": "2014-01-01",
+          "valid_to": "2015-06-15"
+        },
+        {
+          "classification_id": "USSZ20F15K9757",
+          "valid_from": "2019-01-01",
+          "valid_to": "2020-11-02"
+        }
+      ],
+      "issuer_securities": [],
+      "prices_daily_summary": {
+        "bars": 3663,
+        "distinct_cls": 1,
+        "first_bar": "2007-10-19",
+        "last_bar": "2026-06-02"
+      },
+      "prices_daily_bars_before_FPFD_attributed_to_active": 2491,
+      "prices_daily_bars_before_FPFD_total": 2491,
+      "fundamentals_quarterly_summary": {
+        "rows": 29,
+        "earliest": "2019-03-31",
+        "latest": "2026-03-31"
+      },
+      "fundamentals_quarterly_rows_before_FPFD": 10
+    }
+  ]
+}

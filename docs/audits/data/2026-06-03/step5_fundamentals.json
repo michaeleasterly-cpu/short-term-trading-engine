@@ -1,0 +1,128 @@
+{
+  "columns": [
+    "id",
+    "ticker",
+    "filing_date",
+    "period_end_date",
+    "period_label",
+    "net_income",
+    "fcf",
+    "operating_cash_flow",
+    "capex",
+    "revenue",
+    "total_assets",
+    "total_liabilities",
+    "current_assets",
+    "current_liabilities",
+    "receivables",
+    "cash_and_equivalents",
+    "shares_outstanding",
+    "recorded_at",
+    "pb",
+    "de",
+    "classification_id"
+  ],
+  "primary_key": [
+    "PRIMARY KEY (id)"
+  ],
+  "total_rows": 183421,
+  "has_classification_id_column": true,
+  "rows_before_active_cls_fpfd": {
+    "rows": 6017,
+    "tickers_affected": 775
+  },
+  "rows_without_active_classification": 1034,
+  "rows_for_tickers_with_multiple_classifications": {
+    "rows": 9361,
+    "tickers": 327
+  },
+  "active_with_metadata": 2050,
+  "spac_tickers_in_fundamentals": 478,
+  "fundamentals_by_filer_form": [
+    {
+      "form": "10-Q",
+      "tickers": 1483,
+      "rows": 47010
+    },
+    {
+      "form": "20-F",
+      "tickers": 269,
+      "rows": 7393
+    },
+    {
+      "form": "40-F",
+      "tickers": 45,
+      "rows": 1553
+    },
+    {
+      "form": "10-K",
+      "tickers": 4,
+      "rows": 31
+    }
+  ],
+  "duplicate_logical_quarters": 109,
+  "top_10_duplicate_examples": [
+    {
+      "ticker": "PKX",
+      "period": "2026-03-31",
+      "n": 2
+    },
+    {
+      "ticker": "TRI",
+      "period": "2016-06-30",
+      "n": 2
+    },
+    {
+      "ticker": "SSAC",
+      "period": "2025-12-31",
+      "n": 2
+    },
+    {
+      "ticker": "CRESY",
+      "period": "2026-03-31",
+      "n": 2
+    },
+    {
+      "ticker": "TNK",
+      "period": "2026-03-31",
+      "n": 2
+    },
+    {
+      "ticker": "SNOW",
+      "period": "2026-04-30",
+      "n": 2
+    },
+    {
+      "ticker": "DOCS",
+      "period": "2026-03-31",
+      "n": 2
+    },
+    {
+      "ticker": "KD",
+      "period": "2026-03-31",
+      "n": 2
+    },
+    {
+      "ticker": "SUPV",
+      "period": "2026-03-31",
+      "n": 2
+    },
+    {
+      "ticker": "EMAT",
+      "period": "2024-12-31",
+      "n": 2
+    }
+  ],
+  "pre_fpfd_pollution_summary": {
+    "pre_fpfd_tickers": 775,
+    "pre_fpfd_rows": 6017
+  },
+  "recent_inserts_today": {
+    "recent_inserts": 1603,
+    "recent_tickers": 58,
+    "first_today": "2026-06-02 22:24:06.895421+00:00",
+    "last_today": "2026-06-03 10:06:55.851254+00:00"
+  },
+  "fundamentals_quarterly_archive_count": 0,
+  "fundamentals_quarterly_quarantine_count": 0
+}

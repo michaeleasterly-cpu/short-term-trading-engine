@@ -1,0 +1,98 @@
+{
+  "ticker_lifecycle_events": {
+    "total": 1129,
+    "by_form_type": [
+      {
+        "form": "25-NSE",
+        "n": 695
+      },
+      {
+        "form": "25",
+        "n": 208
+      },
+      {
+        "form": "15-12G",
+        "n": 194
+      },
+      {
+        "form": "15-12B",
+        "n": 22
+      },
+      {
+        "form": "15-15D",
+        "n": 10
+      }
+    ]
+  },
+  "corporate_events": {
+    "total": 5860,
+    "by_kind": [
+      {
+        "kind": "name_only_change",
+        "n": 5781
+      },
+      {
+        "kind": "merger",
+        "n": 25
+      },
+      {
+        "kind": "take_private",
+        "n": 20
+      },
+      {
+        "kind": "bankruptcy_liquidation",
+        "n": 20
+      },
+      {
+        "kind": "asset_sale",
+        "n": 5
+      },
+      {
+        "kind": "acquisition",
+        "n": 5
+      },
+      {
+        "kind": "ticker_swap",
+        "n": 4
+      }
+    ]
+  },
+  "corporate_actions": {
+    "total": 112429,
+    "by_action_type": [
+      {
+        "type": "dividend",
+        "n": 112178
+      },
+      {
+        "type": "split",
+        "n": 251
+      }
+    ]
+  },
+  "issuer_history": {
+    "total": 8794,
+    "by_source": [
+      {
+        "source": "sec_edgar",
+        "n": 8794
+      }
+    ]
+  },
+  "active_cls_by_lifecycle_state": [
+    {
+      "state": null,
+      "n": 12344
+    }
+  ],
+  "symbol_history_arc_classifications_by_source": [
+    {
+      "source": "symbol_history_evidence_backfill.F",
+      "n": 5100
+    },
+    {
+      "source": "symbol_history_evidence_backfill.S",
+      "n": 64
+    }
+  ]
+}

@@ -1,0 +1,419 @@
+{
+  "ticker_classifications_global": {
+    "total_rows": 19004,
+    "active": 12344,
+    "retired": 6660,
+    "w_cik": 10537,
+    "w_figi": 12656,
+    "w_cusip": 11277,
+    "w_isin": 12134,
+    "w_fpfd": 2119,
+    "sentinel_ls": 13840,
+    "null_ls": 0,
+    "w_country": 17370,
+    "w_gics": 11877,
+    "w_asset_class": 19004
+  },
+  "ticker_classifications_active": {
+    "active": 12344,
+    "w_cik": 9310,
+    "w_figi": 11545,
+    "w_cusip": 10286,
+    "w_isin": 10998,
+    "w_fpfd": 2050,
+    "sentinel_ls": 12344
+  },
+  "tickers_with_multiple_classifications": 702,
+  "top_25_tickers_with_multiple_cls": [
+    {
+      "ticker": "EAGL",
+      "n_cls": 5
+    },
+    {
+      "ticker": "HCACU",
+      "n_cls": 5
+    },
+    {
+      "ticker": "HCAC",
+      "n_cls": 4
+    },
+    {
+      "ticker": "ABP",
+      "n_cls": 3
+    },
+    {
+      "ticker": "ACT",
+      "n_cls": 3
+    },
+    {
+      "ticker": "AGH",
+      "n_cls": 3
+    },
+    {
+      "ticker": "AGI",
+      "n_cls": 3
+    },
+    {
+      "ticker": "ALTS",
+      "n_cls": 3
+    },
+    {
+      "ticker": "AMCI",
+      "n_cls": 3
+    },
+    {
+      "ticker": "BTC",
+      "n_cls": 3
+    },
+    {
+      "ticker": "BTX",
+      "n_cls": 3
+    },
+    {
+      "ticker": "BUR",
+      "n_cls": 3
+    },
+    {
+      "ticker": "CALY",
+      "n_cls": 3
+    },
+    {
+      "ticker": "CDL",
+      "n_cls": 3
+    },
+    {
+      "ticker": "EAGLU",
+      "n_cls": 3
+    },
+    {
+      "ticker": "FACT",
+      "n_cls": 3
+    },
+    {
+      "ticker": "FTEL",
+      "n_cls": 3
+    },
+    {
+      "ticker": "GPAC",
+      "n_cls": 3
+    },
+    {
+      "ticker": "HYAC",
+      "n_cls": 3
+    },
+    {
+      "ticker": "INFO",
+      "n_cls": 3
+    },
+    {
+      "ticker": "LMCA",
+      "n_cls": 3
+    },
+    {
+      "ticker": "MATH",
+      "n_cls": 3
+    },
+    {
+      "ticker": "MSS",
+      "n_cls": 3
+    },
+    {
+      "ticker": "PAAC",
+      "n_cls": 3
+    },
+    {
+      "ticker": "PAACU",
+      "n_cls": 3
+    }
+  ],
+  "ciks_with_multiple_classifications": 1046,
+  "top_25_ciks_with_multiple_cls": [
+    {
+      "cik": "0001100663",
+      "n_cls": 265
+    },
+    {
+      "cik": "0001174610",
+      "n_cls": 108
+    },
+    {
+      "cik": "0001064642",
+      "n_cls": 79
+    },
+    {
+      "cik": "0001424958",
+      "n_cls": 76
+    },
+    {
+      "cik": "0001432353",
+      "n_cls": 72
+    },
+    {
+      "cik": "0001378872",
+      "n_cls": 72
+    },
+    {
+      "cik": "0001350487",
+      "n_cls": 63
+    },
+    {
+      "cik": "0001667919",
+      "n_cls": 59
+    },
+    {
+      "cik": "0001137360",
+      "n_cls": 56
+    },
+    {
+      "cik": "0001485894",
+      "n_cls": 53
+    },
+    {
+      "cik": "0000930667",
+      "n_cls": 52
+    },
+    {
+      "cik": "0001209466",
+      "n_cls": 51
+    },
+    {
+      "cik": "0001616668",
+      "n_cls": 44
+    },
+    {
+      "cik": "0001655589",
+      "n_cls": 40
+    },
+    {
+      "cik": "0000945908",
+      "n_cls": 39
+    },
+    {
+      "cik": "0001540305",
+      "n_cls": 34
+    },
+    {
+      "cik": "0001479026",
+      "n_cls": 31
+    },
+    {
+      "cik": "0001415726",
+      "n_cls": 31
+    },
+    {
+      "cik": "0001683471",
+      "n_cls": 30
+    },
+    {
+      "cik": "0001516212",
+      "n_cls": 30
+    },
+    {
+      "cik": "0001710607",
+      "n_cls": 29
+    },
+    {
+      "cik": "0001454889",
+      "n_cls": 28
+    },
+    {
+      "cik": "0001552740",
+      "n_cls": 28
+    },
+    {
+      "cik": "0001491978",
+      "n_cls": 27
+    },
+    {
+      "cik": "0001503123",
+      "n_cls": 26
+    }
+  ],
+  "ticker_classifications_by_source": [
+    {
+      "source": "alpaca_name",
+      "n": 13670
+    },
+    {
+      "source": "symbol_history_evidence_backfill.F",
+      "n": 5100
+    },
+    {
+      "source": "parent_resolver_backfill",
+      "n": 87
+    },
+    {
+      "source": "symbol_history_evidence_backfill.S",
+      "n": 64
+    },
+    {
+      "source": "sec_edgar_orphan_resolve_phaseB",
+      "n": 35
+    },
+    {
+      "source": "sec_edgar_orphan_resolve_phaseC2_fmp",
+      "n": 25
+    },
+    {
+      "source": "sec_edgar_orphan_resolve_phaseC1_openfigi",
+      "n": 11
+    },
+    {
+      "source": "sec_edgar_orphan_resolve",
+      "n": 7
+    },
+    {
+      "source": "alpaca_per_ticker",
+      "n": 4
+    },
+    {
+      "source": "sec_edgar_orphan_resolve_manual",
+      "n": 1
+    }
+  ],
+  "ticker_classifications_by_discovery_source": [
+    {
+      "discovery_source": null,
+      "n": 13674
+    },
+    {
+      "discovery_source": "F",
+      "n": 5212
+    },
+    {
+      "discovery_source": "S",
+      "n": 107
+    },
+    {
+      "discovery_source": "O",
+      "n": 11
+    }
+  ],
+  "ticker_history_global": {
+    "total_rows": 19013,
+    "distinct_tickers": 18264,
+    "distinct_cls": 19004,
+    "open_ended": 13592,
+    "closed": 5421
+  },
+  "ticker_history_rows_per_ticker_distribution": [
+    {
+      "rows_per_ticker": 1,
+      "tickers_with_this_count": 17554
+    },
+    {
+      "rows_per_ticker": 2,
+      "tickers_with_this_count": 676
+    },
+    {
+      "rows_per_ticker": 3,
+      "tickers_with_this_count": 31
+    },
+    {
+      "rows_per_ticker": 4,
+      "tickers_with_this_count": 1
+    },
+    {
+      "rows_per_ticker": 5,
+      "tickers_with_this_count": 2
+    }
+  ],
+  "top_20_tickers_with_multi_history": [
+    {
+      "ticker": "EAGL",
+      "n_rows": 5
+    },
+    {
+      "ticker": "HCACU",
+      "n_rows": 5
+    },
+    {
+      "ticker": "HCAC",
+      "n_rows": 4
+    },
+    {
+      "ticker": "ABP",
+      "n_rows": 3
+    },
+    {
+      "ticker": "ACT",
+      "n_rows": 3
+    },
+    {
+      "ticker": "AGH",
+      "n_rows": 3
+    },
+    {
+      "ticker": "AGI",
+      "n_rows": 3
+    },
+    {
+      "ticker": "ALTS",
+      "n_rows": 3
+    },
+    {
+      "ticker": "AMCI",
+      "n_rows": 3
+    },
+    {
+      "ticker": "BTC",
+      "n_rows": 3
+    },
+    {
+      "ticker": "BTX",
+      "n_rows": 3
+    },
+    {
+      "ticker": "BUR",
+      "n_rows": 3
+    },
+    {
+      "ticker": "CALY",
+      "n_rows": 3
+    },
+    {
+      "ticker": "CDL",
+      "n_rows": 3
+    },
+    {
+      "ticker": "EAGLU",
+      "n_rows": 3
+    },
+    {
+      "ticker": "FACT",
+      "n_rows": 3
+    },
+    {
+      "ticker": "FTEL",
+      "n_rows": 3
+    },
+    {
+      "ticker": "GPAC",
+      "n_rows": 3
+    },
+    {
+      "ticker": "HYAC",
+      "n_rows": 3
+    },
+    {
+      "ticker": "INFO",
+      "n_rows": 3
+    }
+  ],
+  "issuer_securities_global": {
+    "total_rows": 89,
+    "distinct_issuers": 76,
+    "distinct_cls": 83
+  },
+  "issuers_global": {
+    "total_rows": 3601,
+    "w_cik": 3592,
+    "w_legal_name": 3601
+  },
+  "active_cls_without_substrate_links": {
+    "no_th": 0,
+    "no_iss": 12337
+  },
+  "ticker_history_orphan_classification_id": 0,
+  "issuer_securities_orphan_issuer_id": 0
+}
