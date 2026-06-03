@@ -4,6 +4,57 @@ Cross-cutting personal action items that don't fit existing docs. Operational
 build queues belong in `docs/DATABASE_AND_DATAFLOW.md §5 Implementation Queue`
 or `docs/MASTER_PLAN.md §9 Build Order`.
 
+## ⚑ Vendor-vs-hand-rolled audit (2026-06-03 PM)
+
+Follow-up to the morning audit's "What the original audit got wrong" section. Docs-only audit landed at `docs/audits/2026-06-03-vendor-vs-handrolled.md`. Sentinel: `tests/test_vendor_vs_handrolled_audit_documented.py`. **No implementation included in the audit PR.**
+
+For each of the 6 STE-hand-rolled surfaces the morning audit named, Anthropic publishes an official equivalent. Per-surface dispositions:
+
+| Surface | Disposition | Anthropic equivalent |
+| :--- | :--- | :--- |
+| `.claude/rules/security-guidance.md` + `.claude/skills/security-review/` | **Vendor** (with per-layer kill-switches) | `plugins/security-guidance` |
+| `code-quality-reviewer.md` + `spec-reviewer.md` | **Hybrid: vendor 2 of 6 agents** (`silent-failure-hunter`, `type-design-analyzer`) | `plugins/pr-review-toolkit` |
+| Spec/plan/implement pipeline + heavy-lane discipline | **Stay diverged** | `plugins/feature-dev` |
+| 5 bash hooks | **Stay diverged for existing 5; adopt for new SWV/CIC gate hooks** | `plugins/hookify` |
+| Manual subagents for research/discovery | **Study + cherry-pick shape; do not pre-build** | `financial-services/managed-agent-cookbooks/{market-researcher,earnings-reviewer,statement-auditor}` |
+| Manual git commit + `gh pr create` flow | **Vendor** | `plugins/commit-commands` |
+
+### Operator decisions required (§9 of the vendor audit)
+
+1. **security-guidance vendor** — vendor? Layer 1 only / + Layer 2 / + Layer 3? Recommend: Layer 1 (pattern rules — free) only initially; defer LLM-backed layers until cost is measured.
+2. **`silent-failure-hunter` vendor** — copy verbatim or adapt to STE silent-skip vocabulary? Recommend: adapt.
+3. **`type-design-analyzer` vendor** — copy verbatim or merge with morning-audit CIC gate? Recommend: merge.
+4. **`/quick-feature` thin skill for non-heavy-lane work** — write or skip? Recommend: skip; default lane already covers this.
+5. **hookify for new SWV/CIC gate hooks** — adopt for the new advisory hooks or hand-code? Recommend: hand-code the first to validate, migrate to hookify if a second of similar shape lands.
+6. **financial-services cookbook shape study** — schedule a future "rebuild auditheal as orchestrator + leaf subagents" arc, or leave as pointer? Recommend: pointer.
+7. **commit-commands vendor** — vendor + encode HEREDOC + Co-Authored-By footer in command bodies? Recommend: yes.
+
+### Combined queue from BOTH 2026-06-03 audits
+
+Both audits' operator-decision queues together — 18 items total. Order suggested for processing:
+
+**Tier 1 — low risk + high value (recommend doing first):**
+- Vendor-audit #7: `commit-commands` vendor.
+- Vendor-audit #2: `silent-failure-hunter` agent (after adapting to STE silent-skip vocabulary).
+- Controls-audit #5: `permissions.deny` block in `.claude/settings.json`.
+- Controls-audit #4: subagent `worktree.baseRef: fresh` + CI merge-base sentinel — *demonstrated live during PR #458 today; the rebase-from-origin/main pattern works but is manual*.
+
+**Tier 2 — design before implementation:**
+- Controls-audit #1 + #2: SWV gate + CIC gate paths and auto-load.
+- Vendor-audit #3: `type-design-analyzer` merged with CIC gate.
+- Vendor-audit #1: security-guidance vendor (Layer 1 only).
+- Controls-audit #10 + #11: identity-path gate + "no new table without schema rationale" rule wording.
+
+**Tier 3 — defer:**
+- Controls-audit #3: `UserPromptSubmit` advisory hook for SWV.
+- Vendor-audit #5: hookify adoption.
+- Vendor-audit #6: cookbook-shape study (when STE next rebuilds lab/auditheal).
+- Vendor-audit #4: `/quick-feature` thin skill — skip.
+- Controls-audit #6: `permissions.defaultMode` — leave unset.
+
+**Already moot:**
+- Controls-audit #7 + #8 + #9: superseded by PR #458 (paid reviewer retired).
+
 ## ⚑ Claude Code workflow controls — alignment + failure-prevention audit (2026-06-03)
 
 Docs-only audit landed at `docs/audits/2026-06-03-claude-code-workflow-controls.md`. Sentinel: `tests/test_claude_code_workflow_controls_audit_documented.py`. **No implementation included in the audit PR.** The audit is the alignment + design pass; the controls below are deferred for operator decision before any of them go live.
