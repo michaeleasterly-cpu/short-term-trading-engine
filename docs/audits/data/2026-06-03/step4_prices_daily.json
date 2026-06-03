@@ -1,0 +1,245 @@
+{
+  "total_bars": 21383303,
+  "null_classification_id": 0,
+  "orphan_classification_id": 0,
+  "bars_before_fpfd": {
+    "bars_before_fpfd": 1296359,
+    "tickers_affected": 1149,
+    "classifications_affected": 1149
+  },
+  "bars_after_lifetime_end": {
+    "bars_after_lifetime_end": 35,
+    "tickers_affected": 27,
+    "classifications_affected": 27
+  },
+  "bars_outside_ticker_history_window": 19964,
+  "bars_attributed_to_wrong_cls_per_ticker_history": {
+    "rows": 92318,
+    "tickers": 266
+  },
+  "top_50_pre_fpfd_pollution_tickers": [
+    {
+      "ticker": "BLK",
+      "bars": 6223
+    },
+    {
+      "ticker": "CUB",
+      "bars": 6161
+    },
+    {
+      "ticker": "FUN",
+      "bars": 6151
+    },
+    {
+      "ticker": "SBGI",
+      "bars": 5908
+    },
+    {
+      "ticker": "BG",
+      "bars": 5678
+    },
+    {
+      "ticker": "QDEL",
+      "bars": 5659
+    },
+    {
+      "ticker": "CAI",
+      "bars": 5530
+    },
+    {
+      "ticker": "LMT",
+      "bars": 5458
+    },
+    {
+      "ticker": "PEP",
+      "bars": 5199
+    },
+    {
+      "ticker": "EE",
+      "bars": 5167
+    },
+    {
+      "ticker": "ASRT",
+      "bars": 5137
+    },
+    {
+      "ticker": "SLVR",
+      "bars": 5122
+    },
+    {
+      "ticker": "PATH",
+      "bars": 5040
+    },
+    {
+      "ticker": "SBET",
+      "bars": 4926
+    },
+    {
+      "ticker": "CI",
+      "bars": 4840
+    },
+    {
+      "ticker": "CGNT",
+      "bars": 4837
+    },
+    {
+      "ticker": "PSKY",
+      "bars": 4832
+    },
+    {
+      "ticker": "NTR",
+      "bars": 4766
+    },
+    {
+      "ticker": "GRIN",
+      "bars": 4681
+    },
+    {
+      "ticker": "EVRG",
+      "bars": 4640
+    },
+    {
+      "ticker": "CLMT",
+      "bars": 4637
+    },
+    {
+      "ticker": "TEVA",
+      "bars": 4585
+    },
+    {
+      "ticker": "ACET",
+      "bars": 4544
+    },
+    {
+      "ticker": "RPRX",
+      "bars": 4537
+    },
+    {
+      "ticker": "BTI",
+      "bars": 4527
+    },
+    {
+      "ticker": "LIN",
+      "bars": 4463
+    },
+    {
+      "ticker": "DV",
+      "bars": 4374
+    },
+    {
+      "ticker": "BNZI",
+      "bars": 4354
+    },
+    {
+      "ticker": "APP",
+      "bars": 4345
+    },
+    {
+      "ticker": "CCEP",
+      "bars": 4277
+    },
+    {
+      "ticker": "CALY",
+      "bars": 4213
+    },
+    {
+      "ticker": "ADEA",
+      "bars": 4179
+    },
+    {
+      "ticker": "HNI",
+      "bars": 4151
+    },
+    {
+      "ticker": "AFL",
+      "bars": 4149
+    },
+    {
+      "ticker": "BKH",
+      "bars": 4149
+    },
+    {
+      "ticker": "BXP",
+      "bars": 4149
+    },
+    {
+      "ticker": "CHRW",
+      "bars": 4148
+    },
+    {
+      "ticker": "DHI",
+      "bars": 4148
+    },
+    {
+      "ticker": "VFC",
+      "bars": 4087
+    },
+    {
+      "ticker": "ALK",
+      "bars": 4085
+    },
+    {
+      "ticker": "EXE",
+      "bars": 4085
+    },
+    {
+      "ticker": "RIG",
+      "bars": 4085
+    },
+    {
+      "ticker": "UPS",
+      "bars": 4085
+    },
+    {
+      "ticker": "APD",
+      "bars": 4084
+    },
+    {
+      "ticker": "BWA",
+      "bars": 4084
+    },
+    {
+      "ticker": "NWL",
+      "bars": 4084
+    },
+    {
+      "ticker": "BHC",
+      "bars": 4082
+    },
+    {
+      "ticker": "DGX",
+      "bars": 4082
+    },
+    {
+      "ticker": "SAM",
+      "bars": 4082
+    },
+    {
+      "ticker": "HSIC",
+      "bars": 4079
+    }
+  ],
+  "recent_session_window_size": 30,
+  "recent_session_range": {
+    "oldest": "2026-04-21",
+    "newest": "2026-06-02"
+  },
+  "prices_daily_by_source": [
+    {
+      "source": "tradier",
+      "n": 15075209
+    },
+    {
+      "source": "fmp",
+      "n": 3549151
+    },
+    {
+      "source": "alpaca",
+      "n": 2758943
+    }
+  ],
+  "date_range": {
+    "lo": "1994-07-21",
+    "hi": "2026-06-02"
+  }
+}

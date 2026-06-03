@@ -1,0 +1,5325 @@
+{
+  "schemas": [
+    "auth",
+    "extensions",
+    "graphql",
+    "graphql_public",
+    "pg_toast_temp_10",
+    "pg_toast_temp_14",
+    "pg_toast_temp_22",
+    "pg_toast_temp_24",
+    "pg_toast_temp_28",
+    "pg_toast_temp_29",
+    "pg_toast_temp_31",
+    "pg_toast_temp_32",
+    "pg_toast_temp_33",
+    "pg_toast_temp_35",
+    "pg_toast_temp_38",
+    "pg_toast_temp_39",
+    "pg_toast_temp_4",
+    "pg_toast_temp_40",
+    "pg_toast_temp_41",
+    "pg_toast_temp_43",
+    "pg_toast_temp_46",
+    "pg_toast_temp_49",
+    "pg_toast_temp_50",
+    "pg_toast_temp_53",
+    "pg_toast_temp_58",
+    "pg_toast_temp_59",
+    "pg_toast_temp_6",
+    "pg_toast_temp_7",
+    "pg_toast_temp_8",
+    "pg_toast_temp_9",
+    "pgbouncer",
+    "platform",
+    "public",
+    "realtime",
+    "storage",
+    "vault"
+  ],
+  "tables": [
+    {
+      "schema": "platform",
+      "name": "aar_deferred",
+      "estimated_rows": -1,
+      "total_bytes": 24576,
+      "comment": "Deferred After-Action Reports \u2014 the Wave-4 E4 self-heal substrate. ``aar_logging`` plug raised during the engine cycle; the AAR is queued here so the cycle continues and a later ops.py --stage aar_replay (or the next engine cycle) rehydrates the row into platform.aar_events. Partial index on replayed_at IS NULL keeps the replay query cheap.",
+      "exact_rows": 0
+    },
+    {
+      "schema": "platform",
+      "name": "aar_events",
+      "estimated_rows": 0,
+      "total_bytes": 73728,
+      "comment": null,
+      "exact_rows": 0
+    },
+    {
+      "schema": "platform",
+      "name": "alembic_version",
+      "estimated_rows": 1,
+      "total_bytes": 57344,
+      "comment": null,
+      "exact_rows": 1
+    },
+    {
+      "schema": "platform",
+      "name": "allocations",
+      "estimated_rows": -1,
+      "total_bytes": 49152,
+      "comment": null,
+      "exact_rows": 11
+    },
+    {
+      "schema": "platform",
+      "name": "application_log",
+      "estimated_rows": 1263,
+      "total_bytes": 2605056,
+      "comment": null,
+      "exact_rows": 1281
+    },
+    {
+      "schema": "platform",
+      "name": "borrow_rates",
+      "estimated_rows": 33,
+      "total_bytes": 98304,
+      "comment": null,
+      "exact_rows": 81
+    },
+    {
+      "schema": "platform",
+      "name": "corporate_actions",
+      "estimated_rows": 111726,
+      "total_bytes": 94642176,
+      "comment": null
+    },
+    {
+      "schema": "platform",
+      "name": "corporate_events",
+      "estimated_rows": 5597,
+      "total_bytes": 3301376,
+      "comment": null,
+      "exact_rows": 5860
+    },
+    {
+      "schema": "platform",
+      "name": "daemon_heartbeats",
+      "estimated_rows": 4,
+      "total_bytes": 65536,
+      "comment": null,
+      "exact_rows": 4
+    },
+    {
+      "schema": "platform",
+      "name": "data_quality_log",
+      "estimated_rows": 6407,
+      "total_bytes": 3350528,
+      "comment": null,
+      "exact_rows": 6407
+    },
+    {
+      "schema": "platform",
+      "name": "earnings_events",
+      "estimated_rows": 35074,
+      "total_bytes": 11419648,
+      "comment": null,
+      "exact_rows": 35135
+    },
+    {
+      "schema": "platform",
+      "name": "earnings_events_count_snapshot",
+      "estimated_rows": 1449,
+      "total_bytes": 303104,
+      "comment": "Per-ticker EARNINGS_BEAT row-count baseline. Gates the zero-tolerance earnings_events_monotone invariant: every ticker's live COUNT(*) WHERE event_type='EARNINGS_BEAT' must be >= the value here. EARNINGS_BEAT rows are append-only; any per-ticker decrease is vendor truncation / deletion event. KNOWN GAP (P1 follow-on): backfill_earnings_events._classify_beat is BEAT-only (actual > estimate * 1.05) \u2014 this invariant catches truncation, NOT missed-detection from an FMP outage. Resolution requires emitting a NO_BEAT sentinel per quarter so per-quarter completeness becomes auditable.",
+      "exact_rows": 1449
+    },
+    {
+      "schema": "platform",
+      "name": "failed_alpha_ledger",
+      "estimated_rows": -1,
+      "total_bytes": 131072,
+      "comment": null,
+      "exact_rows": 5
+    },
+    {
+      "schema": "platform",
+      "name": "forensics_triggers",
+      "estimated_rows": -1,
+      "total_bytes": 16384,
+      "comment": null,
+      "exact_rows": 0
+    },
+    {
+      "schema": "platform",
+      "name": "fundamentals_period_source_evidence",
+      "estimated_rows": 506,
+      "total_bytes": 172032,
+      "comment": null,
+      "exact_rows": 506
+    },
+    {
+      "schema": "platform",
+      "name": "fundamentals_quarterly",
+      "estimated_rows": 183342,
+      "total_bytes": 99409920,
+      "comment": null
+    },
+    {
+      "schema": "platform",
+      "name": "fundamentals_quarterly_archive",
+      "estimated_rows": -1,
+      "total_bytes": 32768,
+      "comment": null,
+      "exact_rows": 0
+    },
+    {
+      "schema": "platform",
+      "name": "fundamentals_quarterly_quarantine",
+      "estimated_rows": -1,
+      "total_bytes": 32768,
+      "comment": null,
+      "exact_rows": 0
+    },
+    {
+      "schema": "platform",
+      "name": "ingest_manifest",
+      "estimated_rows": 111,
+      "total_bytes": 131072,
+      "comment": null,
+      "exact_rows": 113
+    },
+    {
+      "schema": "platform",
+      "name": "ingest_quarantine",
+      "estimated_rows": -1,
+      "total_bytes": 65536,
+      "comment": null,
+      "exact_rows": 4
+    },
+    {
+      "schema": "platform",
+      "name": "ingestion_metrics",
+      "estimated_rows": -1,
+      "total_bytes": 32768,
+      "comment": "Durable per-source ingest-run metrics \u2014 substrate for the D2 rolling-median shrinkage detector (LOCKED 2026-05-18 archive-substrate migration). Replaces the local-FS-bound single-prior-CSV detector in tpcore.ingestion.csv_archive for shrinkage detection only; the R3 substrate (S3 bucket) stays the recovery substrate. Row count grows by ~one row per source per scheduled refresh.",
+      "exact_rows": 6
+    },
+    {
+      "schema": "platform",
+      "name": "insider_sentiment",
+      "estimated_rows": 520,
+      "total_bytes": 253952,
+      "comment": null,
+      "exact_rows": 520
+    },
+    {
+      "schema": "platform",
+      "name": "insider_transactions",
+      "estimated_rows": 647163,
+      "total_bytes": 214818816,
+      "comment": null
+    },
+    {
+      "schema": "platform",
+      "name": "issuer_history",
+      "estimated_rows": 8281,
+      "total_bytes": 1712128,
+      "comment": null,
+      "exact_rows": 8794
+    },
+    {
+      "schema": "platform",
+      "name": "issuer_securities",
+      "estimated_rows": 89,
+      "total_bytes": 81920,
+      "comment": null,
+      "exact_rows": 89
+    },
+    {
+      "schema": "platform",
+      "name": "issuers",
+      "estimated_rows": 3525,
+      "total_bytes": 1425408,
+      "comment": null,
+      "exact_rows": 3601
+    },
+    {
+      "schema": "platform",
+      "name": "liquidity_tiers",
+      "estimated_rows": 7684,
+      "total_bytes": 2007040,
+      "comment": null,
+      "exact_rows": 7685
+    },
+    {
+      "schema": "platform",
+      "name": "macro_data",
+      "estimated_rows": 178733,
+      "total_bytes": 70230016,
+      "comment": null
+    },
+    {
+      "schema": "platform",
+      "name": "open_orders",
+      "estimated_rows": -1,
+      "total_bytes": 114688,
+      "comment": null,
+      "exact_rows": 0
+    },
+    {
+      "schema": "platform",
+      "name": "options_max_pain",
+      "estimated_rows": 1,
+      "total_bytes": 98304,
+      "comment": null,
+      "exact_rows": 1
+    },
+    {
+      "schema": "platform",
+      "name": "parity_drift_log",
+      "estimated_rows": -1,
+      "total_bytes": 16384,
+      "comment": null,
+      "exact_rows": 0
+    },
+    {
+      "schema": "platform",
+      "name": "prices_daily",
+      "estimated_rows": 21338924,
+      "total_bytes": 6473809920,
+      "comment": null
+    },
+    {
+      "schema": "platform",
+      "name": "prices_daily_staging",
+      "estimated_rows": 236772,
+      "total_bytes": 99147776,
+      "comment": null
+    },
+    {
+      "schema": "platform",
+      "name": "provider_binding_state",
+      "estimated_rows": -1,
+      "total_bytes": 16384,
+      "comment": null,
+      "exact_rows": 0
+    },
+    {
+      "schema": "platform",
+      "name": "risk_close_ledger",
+      "estimated_rows": -1,
+      "total_bytes": 16384,
+      "comment": null,
+      "exact_rows": 0
+    },
+    {
+      "schema": "platform",
+      "name": "risk_state",
+      "estimated_rows": 5,
+      "total_bytes": 65536,
+      "comment": null,
+      "exact_rows": 5
+    },
+    {
+      "schema": "platform",
+      "name": "sec_insider_row_counts_snapshot",
+      "estimated_rows": 1308,
+      "total_bytes": 270336,
+      "comment": "Per-ticker Form 4 transaction row-count baseline. Gates the zero-tolerance sec_insider_monotone invariant: every ticker's live COUNT(*) must be >= the value here. Form 4 is append-only; any per-ticker decrease is vendor truncation / deletion event.",
+      "exact_rows": 1308
+    },
+    {
+      "schema": "platform",
+      "name": "sec_material_events",
+      "estimated_rows": 237767,
+      "total_bytes": 56680448,
+      "comment": null
+    },
+    {
+      "schema": "platform",
+      "name": "series_catalog",
+      "estimated_rows": 73,
+      "total_bytes": 98304,
+      "comment": null,
+      "exact_rows": 73
+    },
+    {
+      "schema": "platform",
+      "name": "short_interest",
+      "estimated_rows": 4553,
+      "total_bytes": 1474560,
+      "comment": null,
+      "exact_rows": 4553
+    },
+    {
+      "schema": "platform",
+      "name": "social_sentiment",
+      "estimated_rows": 2723,
+      "total_bytes": 622592,
+      "comment": null,
+      "exact_rows": 2723
+    },
+    {
+      "schema": "platform",
+      "name": "split_pre_image_log",
+      "estimated_rows": -1,
+      "total_bytes": 32768,
+      "comment": null,
+      "exact_rows": 0
+    },
+    {
+      "schema": "platform",
+      "name": "spread_observations",
+      "estimated_rows": 31867,
+      "total_bytes": 11173888,
+      "comment": null,
+      "exact_rows": 31867
+    },
+    {
+      "schema": "platform",
+      "name": "ticker_classifications",
+      "estimated_rows": 19004,
+      "total_bytes": 17104896,
+      "comment": null,
+      "exact_rows": 19004
+    },
+    {
+      "schema": "platform",
+      "name": "ticker_classifications_source_count",
+      "estimated_rows": -1,
+      "total_bytes": 24576,
+      "comment": "Per-refresh source-of-truth row count baseline for platform.ticker_classifications (Alpaca /v2/assets is the upstream). Gates the zero-tolerance ticker_classifications_coverage invariant: live COUNT(*) must equal the most recent snapshot's source_count. ANY drift = FAIL. History table (one row per classify_tickers run); written atomically with the classification upserts. Replaces the previous percentage-knob coverage gate (MIN_COVERAGE_PCT=0.90) with a write-time-recorded source-of-truth invariant \u2014 the correct shape for an upstream-derived table.",
+      "exact_rows": 6
+    },
+    {
+      "schema": "platform",
+      "name": "ticker_history",
+      "estimated_rows": 19009,
+      "total_bytes": 6348800,
+      "comment": null,
+      "exact_rows": 19013
+    },
+    {
+      "schema": "platform",
+      "name": "ticker_lifecycle_events",
+      "estimated_rows": 1010,
+      "total_bytes": 557056,
+      "comment": null,
+      "exact_rows": 1129
+    },
+    {
+      "schema": "platform",
+      "name": "tradier_options_chains",
+      "estimated_rows": 122668,
+      "total_bytes": 21217280,
+      "comment": null
+    },
+    {
+      "schema": "platform",
+      "name": "universe_candidates",
+      "estimated_rows": 4591,
+      "total_bytes": 2056192,
+      "comment": null,
+      "exact_rows": 4591
+    }
+  ],
+  "primary_keys": [
+    {
+      "table": "aar_deferred",
+      "constraint": "aar_deferred_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "aar_events",
+      "constraint": "aar_events_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "alembic_version",
+      "constraint": "alembic_version_pkc",
+      "definition": "PRIMARY KEY (version_num)"
+    },
+    {
+      "table": "allocations",
+      "constraint": "allocations_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "application_log",
+      "constraint": "application_log_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "borrow_rates",
+      "constraint": "borrow_rates_pk",
+      "definition": "PRIMARY KEY (ticker, date)"
+    },
+    {
+      "table": "corporate_actions",
+      "constraint": "corporate_actions_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "corporate_events",
+      "constraint": "corporate_events_pk",
+      "definition": "PRIMARY KEY (event_id, realtime_start)"
+    },
+    {
+      "table": "daemon_heartbeats",
+      "constraint": "daemon_heartbeats_pkey",
+      "definition": "PRIMARY KEY (daemon_name)"
+    },
+    {
+      "table": "data_quality_log",
+      "constraint": "data_quality_log_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "earnings_events",
+      "constraint": "pk_earnings_events",
+      "definition": "PRIMARY KEY (ticker, event_date, event_type)"
+    },
+    {
+      "table": "earnings_events_count_snapshot",
+      "constraint": "earnings_events_count_snapshot_pk",
+      "definition": "PRIMARY KEY (ticker)"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "constraint": "failed_alpha_ledger_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "forensics_triggers",
+      "constraint": "coroner_triggers_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "fundamentals_period_source_evidence",
+      "constraint": "fundamentals_period_source_evidence_pk",
+      "definition": "PRIMARY KEY (ticker, period_end_date, source)"
+    },
+    {
+      "table": "fundamentals_quarterly",
+      "constraint": "fundamentals_quarterly_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "fundamentals_quarterly_archive",
+      "constraint": "fundamentals_quarterly_archive_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "fundamentals_quarterly_quarantine",
+      "constraint": "fundamentals_quarterly_quarantine_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "ingest_manifest",
+      "constraint": "ingest_manifest_pkey",
+      "definition": "PRIMARY KEY (manifest_id)"
+    },
+    {
+      "table": "ingest_quarantine",
+      "constraint": "ingest_quarantine_pkey",
+      "definition": "PRIMARY KEY (quarantine_id)"
+    },
+    {
+      "table": "ingestion_metrics",
+      "constraint": "ingestion_metrics_pk",
+      "definition": "PRIMARY KEY (source, ingested_at)"
+    },
+    {
+      "table": "insider_sentiment",
+      "constraint": "insider_sentiment_pk",
+      "definition": "PRIMARY KEY (symbol, year, month)"
+    },
+    {
+      "table": "insider_transactions",
+      "constraint": "insider_transactions_pk",
+      "definition": "PRIMARY KEY (ticker, filing_date, insider_name, transaction_type, shares)"
+    },
+    {
+      "table": "issuer_history",
+      "constraint": "issuer_history_pk",
+      "definition": "PRIMARY KEY (issuer_id, valid_from)"
+    },
+    {
+      "table": "issuer_securities",
+      "constraint": "issuer_securities_pk",
+      "definition": "PRIMARY KEY (issuer_id, classification_id, valid_from)"
+    },
+    {
+      "table": "issuers",
+      "constraint": "issuers_pk",
+      "definition": "PRIMARY KEY (issuer_id)"
+    },
+    {
+      "table": "liquidity_tiers",
+      "constraint": "liquidity_tiers_pkey",
+      "definition": "PRIMARY KEY (ticker)"
+    },
+    {
+      "table": "macro_data",
+      "constraint": "macro_data_pit_pk",
+      "definition": "PRIMARY KEY (source, series_id, observed_date, realtime_start)"
+    },
+    {
+      "table": "open_orders",
+      "constraint": "open_orders_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "options_max_pain",
+      "constraint": "options_max_pain_pk",
+      "definition": "PRIMARY KEY (symbol, expiration_date, observed_date)"
+    },
+    {
+      "table": "parity_drift_log",
+      "constraint": "parity_drift_log_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "prices_daily",
+      "constraint": "prices_daily_pkey",
+      "definition": "PRIMARY KEY (ticker, date)"
+    },
+    {
+      "table": "prices_daily_staging",
+      "constraint": "prices_daily_staging_pkey",
+      "definition": "PRIMARY KEY (staging_run_id, ticker, date)"
+    },
+    {
+      "table": "provider_binding_state",
+      "constraint": "provider_binding_state_pkey",
+      "definition": "PRIMARY KEY (feed)"
+    },
+    {
+      "table": "risk_close_ledger",
+      "constraint": "risk_close_ledger_pkey",
+      "definition": "PRIMARY KEY (engine, trade_id)"
+    },
+    {
+      "table": "risk_state",
+      "constraint": "risk_state_pkey",
+      "definition": "PRIMARY KEY (engine)"
+    },
+    {
+      "table": "sec_insider_row_counts_snapshot",
+      "constraint": "sec_insider_row_counts_snapshot_pk",
+      "definition": "PRIMARY KEY (ticker)"
+    },
+    {
+      "table": "sec_material_events",
+      "constraint": "sec_material_events_pk",
+      "definition": "PRIMARY KEY (ticker, filing_date, event_type)"
+    },
+    {
+      "table": "series_catalog",
+      "constraint": "series_catalog_pk",
+      "definition": "PRIMARY KEY (source, series_id)"
+    },
+    {
+      "table": "short_interest",
+      "constraint": "short_interest_pk",
+      "definition": "PRIMARY KEY (ticker, settlement_date)"
+    },
+    {
+      "table": "social_sentiment",
+      "constraint": "social_sentiment_pk",
+      "definition": "PRIMARY KEY (ticker, date)"
+    },
+    {
+      "table": "split_pre_image_log",
+      "constraint": "split_pre_image_log_pkey",
+      "definition": "PRIMARY KEY (pre_image_id)"
+    },
+    {
+      "table": "spread_observations",
+      "constraint": "spread_observations_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "ticker_classifications_source_count",
+      "constraint": "ticker_classifications_source_count_pk",
+      "definition": "PRIMARY KEY (snapshot_at)"
+    },
+    {
+      "table": "ticker_history",
+      "constraint": "ticker_history_pkey",
+      "definition": "PRIMARY KEY (classification_id, valid_from)"
+    },
+    {
+      "table": "ticker_lifecycle_events",
+      "constraint": "ticker_lifecycle_events_pkey",
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "table": "tradier_options_chains",
+      "constraint": "pk_tradier_options_chains",
+      "definition": "PRIMARY KEY (ticker, expiration_date, strike, option_type)"
+    },
+    {
+      "table": "universe_candidates",
+      "constraint": "universe_candidates_pkey",
+      "definition": "PRIMARY KEY (as_of_date, engine, ticker)"
+    }
+  ],
+  "foreign_keys": [
+    {
+      "table": "borrow_rates",
+      "constraint": "borrow_rates_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "corporate_actions",
+      "constraint": "corporate_actions_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "corporate_events",
+      "constraint": "corporate_events_predecessor_fk",
+      "definition": "FOREIGN KEY (predecessor_cls_id) REFERENCES platform.ticker_classifications(id)"
+    },
+    {
+      "table": "corporate_events",
+      "constraint": "corporate_events_predecessor_issuer_fk",
+      "definition": "FOREIGN KEY (predecessor_issuer_id) REFERENCES platform.issuers(issuer_id)"
+    },
+    {
+      "table": "corporate_events",
+      "constraint": "corporate_events_successor_fk",
+      "definition": "FOREIGN KEY (successor_cls_id) REFERENCES platform.ticker_classifications(id)"
+    },
+    {
+      "table": "corporate_events",
+      "constraint": "corporate_events_successor_issuer_fk",
+      "definition": "FOREIGN KEY (successor_issuer_id) REFERENCES platform.issuers(issuer_id)"
+    },
+    {
+      "table": "earnings_events",
+      "constraint": "earnings_events_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "fundamentals_quarterly",
+      "constraint": "fundamentals_quarterly_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "ingest_quarantine",
+      "constraint": "ingest_quarantine_manifest_id_fkey",
+      "definition": "FOREIGN KEY (manifest_id) REFERENCES platform.ingest_manifest(manifest_id)"
+    },
+    {
+      "table": "insider_sentiment",
+      "constraint": "insider_sentiment_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "insider_transactions",
+      "constraint": "insider_transactions_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "issuer_history",
+      "constraint": "issuer_history_issuer_fk",
+      "definition": "FOREIGN KEY (issuer_id) REFERENCES platform.issuers(issuer_id)"
+    },
+    {
+      "table": "issuer_securities",
+      "constraint": "issuer_securities_issuer_fk",
+      "definition": "FOREIGN KEY (issuer_id) REFERENCES platform.issuers(issuer_id)"
+    },
+    {
+      "table": "issuer_securities",
+      "constraint": "issuer_securities_security_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id)"
+    },
+    {
+      "table": "liquidity_tiers",
+      "constraint": "liquidity_tiers_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "options_max_pain",
+      "constraint": "options_max_pain_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "prices_daily",
+      "constraint": "prices_daily_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "sec_material_events",
+      "constraint": "sec_material_events_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "short_interest",
+      "constraint": "short_interest_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "social_sentiment",
+      "constraint": "social_sentiment_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "spread_observations",
+      "constraint": "spread_observations_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    },
+    {
+      "table": "universe_candidates",
+      "constraint": "universe_candidates_classification_id_fk",
+      "definition": "FOREIGN KEY (classification_id) REFERENCES platform.ticker_classifications(id) ON UPDATE CASCADE ON DELETE RESTRICT"
+    }
+  ],
+  "unique_constraints": [
+    {
+      "table": "aar_events",
+      "constraint": "uq_aar_events_engine_trade",
+      "definition": "UNIQUE (engine, trade_id)"
+    },
+    {
+      "table": "allocations",
+      "constraint": "uq_alloc_engine_date",
+      "definition": "UNIQUE (engine, allocation_date)"
+    },
+    {
+      "table": "corporate_actions",
+      "constraint": "uq_corporate_actions_ticker_date_type",
+      "definition": "UNIQUE (ticker, action_date, action_type)"
+    },
+    {
+      "table": "data_quality_log",
+      "constraint": "uq_dq_source_ts",
+      "definition": "UNIQUE (source, \"timestamp\")"
+    },
+    {
+      "table": "fundamentals_quarterly",
+      "constraint": "uq_fundamentals_ticker_filing",
+      "definition": "UNIQUE (ticker, filing_date)"
+    },
+    {
+      "table": "issuers",
+      "constraint": "issuers_cik_uniq",
+      "definition": "UNIQUE (cik)"
+    },
+    {
+      "table": "issuers",
+      "constraint": "issuers_lei_uniq",
+      "definition": "UNIQUE (lei)"
+    },
+    {
+      "table": "open_orders",
+      "constraint": "open_orders_engine_trade_type_uq",
+      "definition": "UNIQUE (engine, trade_id, order_type)"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_id_uniq",
+      "definition": "UNIQUE (id)"
+    }
+  ],
+  "check_constraints": [
+    {
+      "table": "allocations",
+      "constraint": "allocations_freeze_state_chk",
+      "definition": "CHECK ((freeze_state = ANY (ARRAY['active'::text, 'soft_frozen'::text, 'hard_frozen'::text])))"
+    },
+    {
+      "table": "borrow_rates",
+      "constraint": "borrow_rates_no_future_chk",
+      "definition": "CHECK ((date <= (CURRENT_DATE + '1 day'::interval)))"
+    },
+    {
+      "table": "borrow_rates",
+      "constraint": "borrow_rates_nonneg_chk",
+      "definition": "CHECK ((borrow_rate_pct >= (0)::numeric))"
+    },
+    {
+      "table": "borrow_rates",
+      "constraint": "borrow_rates_ticker_chk",
+      "definition": "CHECK ((length(ticker) > 0))"
+    },
+    {
+      "table": "corporate_actions",
+      "constraint": "ck_corporate_actions_type",
+      "definition": "CHECK ((action_type = ANY (ARRAY['split'::text, 'dividend'::text])))"
+    },
+    {
+      "table": "corporate_events",
+      "constraint": "corporate_events_kind_chk",
+      "definition": "CHECK ((event_kind = ANY (ARRAY['merger'::text, 'acquisition'::text, 'spinoff'::text, 'reverse_merger'::text, 'rename'::text, 'name_only_change'::text, 'cik_change'::text, 'ticker_swap'::text, 'take_private'::text, 'going_private_transaction'::text, 'bankruptcy_reorg'::text, 'bankruptcy_liquidation'::text, 'delisting'::text, 'asset_sale'::text, 'asset_sale_partial'::text, 'recapitalization'::text, 'share_class_collapse'::text, 'going_concern_warning'::text, 'fdic_receivership'::text])))"
+    },
+    {
+      "table": "daemon_heartbeats",
+      "constraint": "ck_daemon_heartbeats_status",
+      "definition": "CHECK ((status = ANY (ARRAY['healthy'::text, 'degraded'::text, 'down'::text])))"
+    },
+    {
+      "table": "earnings_events_count_snapshot",
+      "constraint": "earnings_events_count_snapshot_nonneg_chk",
+      "definition": "CHECK ((beat_count >= 0))"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "constraint": "failed_alpha_ledger_blocking_constraint_chk",
+      "definition": "CHECK ((blocking_constraint = ANY (ARRAY['n_trades_low'::text, 'liquidity_failure'::text, 'dsr_failure'::text, 'psr_failure'::text, 'pbo_failure'::text, 'min_btl_failure'::text, 'signal_class_mismatch'::text, 'multi_gate_intersection'::text, 'regime_fragility'::text, 'cost_dominated'::text, 'data_quality_failure'::text, 'lookahead_or_bias_risk'::text, 'operator_rejected'::text, 'deprecated_signal_source'::text])))"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "constraint": "failed_alpha_ledger_credibility_score_chk",
+      "definition": "CHECK (((credibility_score IS NULL) OR ((credibility_score >= 0) AND (credibility_score <= 100))))"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "constraint": "failed_alpha_ledger_failure_summary_chk",
+      "definition": "CHECK ((length(TRIM(BOTH FROM failure_summary)) > 0))"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "constraint": "failed_alpha_ledger_n_trades_chk",
+      "definition": "CHECK (((n_trades IS NULL) OR (n_trades >= 0)))"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "constraint": "failed_alpha_ledger_n_trials_chk",
+      "definition": "CHECK ((n_trials >= 0))"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "constraint": "failed_alpha_ledger_parameter_count_chk",
+      "definition": "CHECK (((parameter_count IS NULL) OR (parameter_count >= 0)))"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "constraint": "failed_alpha_ledger_status_chk",
+      "definition": "CHECK ((status = ANY (ARRAY['FAILED'::text, 'SHELVED'::text, 'ARCHIVED'::text, 'REVISIT_QUEUED'::text])))"
+    },
+    {
+      "table": "fundamentals_period_source_evidence",
+      "constraint": "fundamentals_period_source_evidence_outcome_check",
+      "definition": "CHECK ((outcome = ANY (ARRAY['yielded'::text, 'empty'::text, 'extract_none'::text, 'fetch_failure'::text])))"
+    },
+    {
+      "table": "fundamentals_period_source_evidence",
+      "constraint": "fundamentals_period_source_evidence_source_check",
+      "definition": "CHECK ((source = ANY (ARRAY['fmp_historical'::text, 'fmp_refresh'::text, 'sec_companyfacts'::text])))"
+    },
+    {
+      "table": "fundamentals_quarterly_quarantine",
+      "constraint": "ck_fq_quarantine_disposition",
+      "definition": "CHECK ((disposition = ANY (ARRAY['ambiguous_predecessor_unknown'::text, 'corp_history_substrate_sparse'::text, 'cik_null'::text, 'operator_review_pending'::text])))"
+    },
+    {
+      "table": "ingest_manifest",
+      "constraint": "ingest_manifest_status_check",
+      "definition": "CHECK ((status = ANY (ARRAY['ok'::text, 'partial'::text, 'failed'::text, 'archived'::text, 'loaded'::text])))"
+    },
+    {
+      "table": "ingest_quarantine",
+      "constraint": "ingest_quarantine_error_kind_check",
+      "definition": "CHECK ((error_kind = ANY (ARRAY['parse'::text, 'validation'::text, 'fk_violation'::text, 'unique_violation'::text, 'check_violation'::text, 'type_coercion'::text, 'other'::text])))"
+    },
+    {
+      "table": "ingest_quarantine",
+      "constraint": "ingest_quarantine_retry_status_check",
+      "definition": "CHECK ((retry_status = ANY (ARRAY['pending'::text, 'retried_ok'::text, 'retried_failed'::text, 'abandoned'::text])))"
+    },
+    {
+      "table": "ingestion_metrics",
+      "constraint": "ingestion_metrics_row_count_nonneg_chk",
+      "definition": "CHECK ((row_count >= 0))"
+    },
+    {
+      "table": "insider_sentiment",
+      "constraint": "insider_sentiment_month_chk",
+      "definition": "CHECK (((month >= 1) AND (month <= 12)))"
+    },
+    {
+      "table": "insider_sentiment",
+      "constraint": "insider_sentiment_mspr_chk",
+      "definition": "CHECK (((mspr >= ('-100'::integer)::numeric) AND (mspr <= (100)::numeric)))"
+    },
+    {
+      "table": "insider_sentiment",
+      "constraint": "insider_sentiment_symbol_chk",
+      "definition": "CHECK ((length(symbol) > 0))"
+    },
+    {
+      "table": "insider_transactions",
+      "constraint": "ck_insider_transactions_source",
+      "definition": "CHECK ((source = ANY (ARRAY['sec'::text, 'fmp'::text])))"
+    },
+    {
+      "table": "insider_transactions",
+      "constraint": "sec_insider_transactions_price_chk",
+      "definition": "CHECK ((price >= (0)::numeric))"
+    },
+    {
+      "table": "insider_transactions",
+      "constraint": "sec_insider_transactions_shares_chk",
+      "definition": "CHECK ((shares > 0))"
+    },
+    {
+      "table": "insider_transactions",
+      "constraint": "sec_insider_transactions_type_chk",
+      "definition": "CHECK ((transaction_type = ANY (ARRAY['BUY'::text, 'SELL'::text])))"
+    },
+    {
+      "table": "insider_transactions",
+      "constraint": "sec_insider_transactions_value_chk",
+      "definition": "CHECK ((value >= (0)::numeric))"
+    },
+    {
+      "table": "issuers",
+      "constraint": "issuers_status_chk",
+      "definition": "CHECK ((status = ANY (ARRAY['active'::text, 'dissolved'::text, 'merged'::text, 'private'::text])))"
+    },
+    {
+      "table": "liquidity_tiers",
+      "constraint": "liquidity_tiers_nonneg_chk",
+      "definition": "CHECK (((median_spread_pct >= (0)::numeric) AND (p95_spread_pct >= (0)::numeric)))"
+    },
+    {
+      "table": "liquidity_tiers",
+      "constraint": "liquidity_tiers_observations_nonneg_chk",
+      "definition": "CHECK ((observations >= 0))"
+    },
+    {
+      "table": "liquidity_tiers",
+      "constraint": "liquidity_tiers_tier_range_chk",
+      "definition": "CHECK (((tier >= 1) AND (tier <= 5)))"
+    },
+    {
+      "table": "macro_data",
+      "constraint": "macro_data_value_xor",
+      "definition": "CHECK (((((value_num IS NOT NULL))::integer + ((value_text IS NOT NULL))::integer) = 1))"
+    },
+    {
+      "table": "open_orders",
+      "constraint": "open_orders_order_type_chk",
+      "definition": "CHECK ((order_type = ANY (ARRAY['tier1'::text, 'tier2'::text])))"
+    },
+    {
+      "table": "open_orders",
+      "constraint": "open_orders_status_chk",
+      "definition": "CHECK ((status = ANY (ARRAY['pending'::text, 'filled'::text, 'cancelled'::text, 'rejected'::text])))"
+    },
+    {
+      "table": "options_max_pain",
+      "constraint": "options_max_pain_no_future_chk",
+      "definition": "CHECK ((observed_date <= (CURRENT_DATE + '1 day'::interval)))"
+    },
+    {
+      "table": "options_max_pain",
+      "constraint": "options_max_pain_spot_chk",
+      "definition": "CHECK ((spot_price > (0)::numeric))"
+    },
+    {
+      "table": "options_max_pain",
+      "constraint": "options_max_pain_symbol_chk",
+      "definition": "CHECK ((length(symbol) > 0))"
+    },
+    {
+      "table": "prices_daily",
+      "constraint": "prices_daily_no_new_alpaca",
+      "definition": "CHECK ((source <> 'alpaca'::text)) NOT VALID"
+    },
+    {
+      "table": "sec_insider_row_counts_snapshot",
+      "constraint": "sec_insider_row_counts_snapshot_nonneg_chk",
+      "definition": "CHECK ((rowcount >= 0))"
+    },
+    {
+      "table": "sec_material_events",
+      "constraint": "sec_material_events_type_nonempty_chk",
+      "definition": "CHECK ((length(event_type) > 0))"
+    },
+    {
+      "table": "series_catalog",
+      "constraint": "series_catalog_dom_chk",
+      "definition": "CHECK (((publish_day_of_month IS NULL) OR ((publish_day_of_month >= 1) AND (publish_day_of_month <= 31))))"
+    },
+    {
+      "table": "series_catalog",
+      "constraint": "series_catalog_freq_chk",
+      "definition": "CHECK ((frequency = ANY (ARRAY['daily'::text, 'weekly'::text, 'monthly'::text, 'quarterly'::text, 'derived'::text])))"
+    },
+    {
+      "table": "series_catalog",
+      "constraint": "series_catalog_weekday_chk",
+      "definition": "CHECK (((publish_weekday IS NULL) OR ((publish_weekday >= 1) AND (publish_weekday <= 7))))"
+    },
+    {
+      "table": "short_interest",
+      "constraint": "short_interest_release_after_settle_chk",
+      "definition": "CHECK ((release_date >= settlement_date))"
+    },
+    {
+      "table": "short_interest",
+      "constraint": "short_interest_ticker_chk",
+      "definition": "CHECK ((length(ticker) > 0))"
+    },
+    {
+      "table": "social_sentiment",
+      "constraint": "social_sentiment_mentions_chk",
+      "definition": "CHECK ((mentions >= 0))"
+    },
+    {
+      "table": "social_sentiment",
+      "constraint": "social_sentiment_no_future_chk",
+      "definition": "CHECK ((date <= (CURRENT_DATE + '1 day'::interval)))"
+    },
+    {
+      "table": "social_sentiment",
+      "constraint": "social_sentiment_ticker_chk",
+      "definition": "CHECK ((length(ticker) > 0))"
+    },
+    {
+      "table": "spread_observations",
+      "constraint": "spread_observations_nonneg_chk",
+      "definition": "CHECK ((spread_pct >= (0)::numeric))"
+    },
+    {
+      "table": "spread_observations",
+      "constraint": "spread_observations_session_chk",
+      "definition": "CHECK ((session = ANY (ARRAY['regular'::text, 'pre_market'::text, 'after_hours'::text])))"
+    },
+    {
+      "table": "spread_observations",
+      "constraint": "spread_observations_source_chk",
+      "definition": "CHECK ((source = ANY (ARRAY['tradier_streaming'::text, 'corwin_schultz'::text, 'abdi_ranaldo'::text])))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "tc_lifetime_order",
+      "definition": "CHECK (((lifetime_end IS NULL) OR (lifetime_end > lifetime_start)))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_asset_class_chk",
+      "definition": "CHECK ((asset_class = ANY (ARRAY['stock'::text, 'adr'::text, 'preferred'::text, 'reit'::text, 'etf'::text, 'etn'::text, 'cef'::text, 'fund'::text, 'spac'::text])))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_cik_source_chk",
+      "definition": "CHECK (((cik_source IS NULL) OR (cik_source = ANY (ARRAY['sec_ticker_map'::text, 'fmp'::text, 'manual'::text]))))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_cusip_format_chk",
+      "definition": "CHECK (((cusip IS NULL) OR (cusip ~ '^[0-9A-Z]{9}$'::text)))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_etf_fields_chk",
+      "definition": "CHECK (((asset_class = ANY (ARRAY['etf'::text, 'etn'::text])) OR ((etf_inverse IS NULL) AND (etf_leverage IS NULL) AND (etf_category IS NULL))))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_figi_format_chk",
+      "definition": "CHECK (((figi IS NULL) OR ((figi ~ '^[BCDFGHJKLMNPQRSTVWXZ]{2}G[BCDFGHJKLMNPQRSTVWXYZ0-9]{8}[0-9]$'::text) AND (\"substring\"((figi)::text, 1, 2) <> ALL (ARRAY['BS'::text, 'BM'::text, 'GG'::text, 'GB'::text, 'VG'::text, 'GH'::text, 'KY'::text])))))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_fiscal_year_end_month_chk",
+      "definition": "CHECK (((fiscal_year_end_month IS NULL) OR ((fiscal_year_end_month >= 1) AND (fiscal_year_end_month <= 12))))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_id_tkr14_regex_chk",
+      "definition": "CHECK (((id IS NULL) OR (id ~ '^[A-Z]{2}[SPEFRTAUWN][NQABOXZ][0-9]{2}[FSAO][0-9A-HJ-KM-NP-TV-Z]{5}[0-9]{2}$'::text)))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_instrument_subtype_chk",
+      "definition": "CHECK (((instrument_subtype IS NULL) OR (instrument_subtype = ANY (ARRAY['share'::text, 'unit'::text, 'warrant'::text, 'vanilla'::text, 'leveraged'::text, 'inverse'::text, 'sponsored'::text, 'unsponsored'::text]))))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_isin_format_chk",
+      "definition": "CHECK (((isin IS NULL) OR (isin ~ '^[A-Z]{2}[0-9A-Z]{9}[0-9]$'::text)))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_issuer_lifecycle_state_chk",
+      "definition": "CHECK (((issuer_lifecycle_state IS NULL) OR (issuer_lifecycle_state = ANY (ARRAY['active'::text, 'delist_pending'::text, 'delist_effective'::text, 'deregistered'::text]))))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_issuer_lifecycle_state_source_chk",
+      "definition": "CHECK (((issuer_lifecycle_state_source IS NULL) OR (issuer_lifecycle_state_source = ANY (ARRAY['sec_form_25'::text, 'sec_form_15'::text, 'sec_form_8k'::text, 'fmp_profile'::text, 'alpaca_asset_status'::text, 'manual'::text]))))"
+    },
+    {
+      "table": "ticker_classifications",
+      "constraint": "ticker_classifications_metadata_source_chk",
+      "definition": "CHECK (((metadata_source IS NULL) OR (metadata_source = ANY (ARRAY['sec_companyfacts'::text, 'sec_submissions'::text, 'manual'::text, 'fmp_profile'::text]))))"
+    },
+    {
+      "table": "ticker_classifications_source_count",
+      "constraint": "ticker_classifications_source_count_positive_chk",
+      "definition": "CHECK ((source_count > 0))"
+    },
+    {
+      "table": "ticker_lifecycle_events",
+      "constraint": "ticker_lifecycle_events_form_type_chk",
+      "definition": "CHECK ((form_type = ANY (ARRAY['25'::text, '25-NSE'::text, '15'::text, '15-12G'::text, '15-12B'::text, '15F'::text, '15-15D'::text])))"
+    },
+    {
+      "table": "ticker_lifecycle_events",
+      "constraint": "ticker_lifecycle_events_source_chk",
+      "definition": "CHECK ((source = ANY (ARRAY['sec_form_25'::text, 'sec_form_15'::text, 'sec_form_8k'::text, 'fmp_profile'::text, 'alpaca_asset_status'::text, 'manual'::text])))"
+    },
+    {
+      "table": "tradier_options_chains",
+      "constraint": "ck_tradier_options_type",
+      "definition": "CHECK ((option_type = ANY (ARRAY['CALL'::text, 'PUT'::text])))"
+    },
+    {
+      "table": "universe_candidates",
+      "constraint": "universe_candidates_tier_range_chk",
+      "definition": "CHECK (((tier IS NULL) OR ((tier >= 1) AND (tier <= 5))))"
+    }
+  ],
+  "exclude_constraints": [
+    {
+      "table": "ticker_history",
+      "constraint": "ticker_history_no_overlap",
+      "definition": "EXCLUDE USING gist (classification_id WITH =, daterange(valid_from, COALESCE(valid_to, 'infinity'::date), '[)'::text) WITH &&)"
+    }
+  ],
+  "indexes": [
+    {
+      "table": "aar_deferred",
+      "index": "aar_deferred_pkey",
+      "definition": "CREATE UNIQUE INDEX aar_deferred_pkey ON platform.aar_deferred USING btree (id)"
+    },
+    {
+      "table": "aar_deferred",
+      "index": "ix_aar_deferred_pending",
+      "definition": "CREATE INDEX ix_aar_deferred_pending ON platform.aar_deferred USING btree (recorded_at) WHERE (replayed_at IS NULL)"
+    },
+    {
+      "table": "aar_events",
+      "index": "aar_events_pkey",
+      "definition": "CREATE UNIQUE INDEX aar_events_pkey ON platform.aar_events USING btree (id)"
+    },
+    {
+      "table": "aar_events",
+      "index": "ix_aar_events_classification_id",
+      "definition": "CREATE INDEX ix_aar_events_classification_id ON platform.aar_events USING btree (classification_id) WHERE (classification_id IS NOT NULL)"
+    },
+    {
+      "table": "aar_events",
+      "index": "ix_aar_events_ticker_recorded",
+      "definition": "CREATE INDEX ix_aar_events_ticker_recorded ON platform.aar_events USING btree (ticker, recorded_at)"
+    },
+    {
+      "table": "aar_events",
+      "index": "uq_aar_events_engine_trade",
+      "definition": "CREATE UNIQUE INDEX uq_aar_events_engine_trade ON platform.aar_events USING btree (engine, trade_id)"
+    },
+    {
+      "table": "alembic_version",
+      "index": "alembic_version_pkc",
+      "definition": "CREATE UNIQUE INDEX alembic_version_pkc ON platform.alembic_version USING btree (version_num)"
+    },
+    {
+      "table": "allocations",
+      "index": "allocations_pkey",
+      "definition": "CREATE UNIQUE INDEX allocations_pkey ON platform.allocations USING btree (id)"
+    },
+    {
+      "table": "allocations",
+      "index": "uq_alloc_engine_date",
+      "definition": "CREATE UNIQUE INDEX uq_alloc_engine_date ON platform.allocations USING btree (engine, allocation_date)"
+    },
+    {
+      "table": "application_log",
+      "index": "application_log_pkey",
+      "definition": "CREATE UNIQUE INDEX application_log_pkey ON platform.application_log USING btree (id)"
+    },
+    {
+      "table": "application_log",
+      "index": "ix_application_log_engine_run_recorded",
+      "definition": "CREATE INDEX ix_application_log_engine_run_recorded ON platform.application_log USING btree (engine, run_id, recorded_at)"
+    },
+    {
+      "table": "borrow_rates",
+      "index": "borrow_rates_classification_id_idx",
+      "definition": "CREATE INDEX borrow_rates_classification_id_idx ON platform.borrow_rates USING btree (classification_id)"
+    },
+    {
+      "table": "borrow_rates",
+      "index": "borrow_rates_pk",
+      "definition": "CREATE UNIQUE INDEX borrow_rates_pk ON platform.borrow_rates USING btree (ticker, date)"
+    },
+    {
+      "table": "borrow_rates",
+      "index": "ix_borrow_rates_date_ticker",
+      "definition": "CREATE INDEX ix_borrow_rates_date_ticker ON platform.borrow_rates USING btree (date, ticker)"
+    },
+    {
+      "table": "corporate_actions",
+      "index": "corporate_actions_classification_id_idx",
+      "definition": "CREATE INDEX corporate_actions_classification_id_idx ON platform.corporate_actions USING btree (classification_id)"
+    },
+    {
+      "table": "corporate_actions",
+      "index": "corporate_actions_pkey",
+      "definition": "CREATE UNIQUE INDEX corporate_actions_pkey ON platform.corporate_actions USING btree (id)"
+    },
+    {
+      "table": "corporate_actions",
+      "index": "ix_corporate_actions_ticker_date",
+      "definition": "CREATE INDEX ix_corporate_actions_ticker_date ON platform.corporate_actions USING btree (ticker, action_date)"
+    },
+    {
+      "table": "corporate_actions",
+      "index": "uq_corporate_actions_ticker_date_type",
+      "definition": "CREATE UNIQUE INDEX uq_corporate_actions_ticker_date_type ON platform.corporate_actions USING btree (ticker, action_date, action_type)"
+    },
+    {
+      "table": "corporate_events",
+      "index": "corporate_events_pk",
+      "definition": "CREATE UNIQUE INDEX corporate_events_pk ON platform.corporate_events USING btree (event_id, realtime_start)"
+    },
+    {
+      "table": "corporate_events",
+      "index": "ix_corp_events_date",
+      "definition": "CREATE INDEX ix_corp_events_date ON platform.corporate_events USING btree (event_date) WHERE (realtime_end = 'infinity'::timestamp with time zone)"
+    },
+    {
+      "table": "corporate_events",
+      "index": "ix_corp_events_pred_issuer",
+      "definition": "CREATE INDEX ix_corp_events_pred_issuer ON platform.corporate_events USING btree (predecessor_issuer_id, event_date) WHERE (realtime_end = 'infinity'::timestamp with time zone)"
+    },
+    {
+      "table": "corporate_events",
+      "index": "ix_corp_events_predecessor",
+      "definition": "CREATE INDEX ix_corp_events_predecessor ON platform.corporate_events USING btree (predecessor_cls_id, event_date) WHERE (realtime_end = 'infinity'::timestamp with time zone)"
+    },
+    {
+      "table": "corporate_events",
+      "index": "ix_corp_events_succ_issuer",
+      "definition": "CREATE INDEX ix_corp_events_succ_issuer ON platform.corporate_events USING btree (successor_issuer_id, event_date) WHERE (realtime_end = 'infinity'::timestamp with time zone)"
+    },
+    {
+      "table": "corporate_events",
+      "index": "ix_corp_events_successor",
+      "definition": "CREATE INDEX ix_corp_events_successor ON platform.corporate_events USING btree (successor_cls_id, event_date) WHERE (realtime_end = 'infinity'::timestamp with time zone)"
+    },
+    {
+      "table": "daemon_heartbeats",
+      "index": "daemon_heartbeats_pkey",
+      "definition": "CREATE UNIQUE INDEX daemon_heartbeats_pkey ON platform.daemon_heartbeats USING btree (daemon_name)"
+    },
+    {
+      "table": "data_quality_log",
+      "index": "data_quality_log_pkey",
+      "definition": "CREATE UNIQUE INDEX data_quality_log_pkey ON platform.data_quality_log USING btree (id)"
+    },
+    {
+      "table": "data_quality_log",
+      "index": "ix_dq_source_ts",
+      "definition": "CREATE INDEX ix_dq_source_ts ON platform.data_quality_log USING btree (source, \"timestamp\")"
+    },
+    {
+      "table": "data_quality_log",
+      "index": "uq_dq_source_ts",
+      "definition": "CREATE UNIQUE INDEX uq_dq_source_ts ON platform.data_quality_log USING btree (source, \"timestamp\")"
+    },
+    {
+      "table": "earnings_events",
+      "index": "earnings_events_classification_id_idx",
+      "definition": "CREATE INDEX earnings_events_classification_id_idx ON platform.earnings_events USING btree (classification_id)"
+    },
+    {
+      "table": "earnings_events",
+      "index": "ix_earnings_events_ticker_date",
+      "definition": "CREATE INDEX ix_earnings_events_ticker_date ON platform.earnings_events USING btree (ticker, event_date)"
+    },
+    {
+      "table": "earnings_events",
+      "index": "pk_earnings_events",
+      "definition": "CREATE UNIQUE INDEX pk_earnings_events ON platform.earnings_events USING btree (ticker, event_date, event_type)"
+    },
+    {
+      "table": "earnings_events_count_snapshot",
+      "index": "earnings_events_count_snapshot_pk",
+      "definition": "CREATE UNIQUE INDEX earnings_events_count_snapshot_pk ON platform.earnings_events_count_snapshot USING btree (ticker)"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "index": "failed_alpha_ledger_pkey",
+      "definition": "CREATE UNIQUE INDEX failed_alpha_ledger_pkey ON platform.failed_alpha_ledger USING btree (id)"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "index": "ix_failed_alpha_ledger_blocking_constraint",
+      "definition": "CREATE INDEX ix_failed_alpha_ledger_blocking_constraint ON platform.failed_alpha_ledger USING btree (blocking_constraint)"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "index": "ix_failed_alpha_ledger_engine",
+      "definition": "CREATE INDEX ix_failed_alpha_ledger_engine ON platform.failed_alpha_ledger USING btree (engine)"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "index": "ix_failed_alpha_ledger_engine_blocking",
+      "definition": "CREATE INDEX ix_failed_alpha_ledger_engine_blocking ON platform.failed_alpha_ledger USING btree (engine, blocking_constraint)"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "index": "ix_failed_alpha_ledger_recorded_at",
+      "definition": "CREATE INDEX ix_failed_alpha_ledger_recorded_at ON platform.failed_alpha_ledger USING btree (recorded_at DESC)"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "index": "ix_failed_alpha_ledger_status",
+      "definition": "CREATE INDEX ix_failed_alpha_ledger_status ON platform.failed_alpha_ledger USING btree (status)"
+    },
+    {
+      "table": "failed_alpha_ledger",
+      "index": "ux_failed_alpha_ledger_engine_sweep",
+      "definition": "CREATE UNIQUE INDEX ux_failed_alpha_ledger_engine_sweep ON platform.failed_alpha_ledger USING btree (engine, sweep_id)"
+    },
+    {
+      "table": "forensics_triggers",
+      "index": "coroner_triggers_pkey",
+      "definition": "CREATE UNIQUE INDEX coroner_triggers_pkey ON platform.forensics_triggers USING btree (id)"
+    },
+    {
+      "table": "fundamentals_period_source_evidence",
+      "index": "fundamentals_period_source_evidence_pk",
+      "definition": "CREATE UNIQUE INDEX fundamentals_period_source_evidence_pk ON platform.fundamentals_period_source_evidence USING btree (ticker, period_end_date, source)"
+    },
+    {
+      "table": "fundamentals_period_source_evidence",
+      "index": "fundamentals_period_source_evidence_ticker_period_idx",
+      "definition": "CREATE INDEX fundamentals_period_source_evidence_ticker_period_idx ON platform.fundamentals_period_source_evidence USING btree (ticker, period_end_date)"
+    },
+    {
+      "table": "fundamentals_quarterly",
+      "index": "fundamentals_quarterly_classification_id_idx",
+      "definition": "CREATE INDEX fundamentals_quarterly_classification_id_idx ON platform.fundamentals_quarterly USING btree (classification_id)"
+    },
+    {
+      "table": "fundamentals_quarterly",
+      "index": "fundamentals_quarterly_pkey",
+      "definition": "CREATE UNIQUE INDEX fundamentals_quarterly_pkey ON platform.fundamentals_quarterly USING btree (id)"
+    },
+    {
+      "table": "fundamentals_quarterly",
+      "index": "idx_fq_missing_ratios",
+      "definition": "CREATE INDEX idx_fq_missing_ratios ON platform.fundamentals_quarterly USING btree (ticker, filing_date) WHERE ((pb IS NULL) OR (de IS NULL))"
+    },
+    {
+      "table": "fundamentals_quarterly",
+      "index": "ix_fundamentals_ticker_filing",
+      "definition": "CREATE INDEX ix_fundamentals_ticker_filing ON platform.fundamentals_quarterly USING btree (ticker, filing_date)"
+    },
+    {
+      "table": "fundamentals_quarterly",
+      "index": "uq_fundamentals_ticker_filing",
+      "definition": "CREATE UNIQUE INDEX uq_fundamentals_ticker_filing ON platform.fundamentals_quarterly USING btree (ticker, filing_date)"
+    },
+    {
+      "table": "fundamentals_quarterly_archive",
+      "index": "fundamentals_quarterly_archive_pkey",
+      "definition": "CREATE UNIQUE INDEX fundamentals_quarterly_archive_pkey ON platform.fundamentals_quarterly_archive USING btree (id)"
+    },
+    {
+      "table": "fundamentals_quarterly_archive",
+      "index": "ix_fq_archive_run",
+      "definition": "CREATE INDEX ix_fq_archive_run ON platform.fundamentals_quarterly_archive USING btree (decided_by_run_id, archived_at)"
+    },
+    {
+      "table": "fundamentals_quarterly_archive",
+      "index": "ix_fq_archive_ticker",
+      "definition": "CREATE INDEX ix_fq_archive_ticker ON platform.fundamentals_quarterly_archive USING btree (ticker, archived_at)"
+    },
+    {
+      "table": "fundamentals_quarterly_quarantine",
+      "index": "fundamentals_quarterly_quarantine_pkey",
+      "definition": "CREATE UNIQUE INDEX fundamentals_quarterly_quarantine_pkey ON platform.fundamentals_quarterly_quarantine USING btree (id)"
+    },
+    {
+      "table": "fundamentals_quarterly_quarantine",
+      "index": "ix_fq_quarantine_run",
+      "definition": "CREATE INDEX ix_fq_quarantine_run ON platform.fundamentals_quarterly_quarantine USING btree (decided_by_run_id, quarantined_at)"
+    },
+    {
+      "table": "fundamentals_quarterly_quarantine",
+      "index": "ix_fq_quarantine_ticker",
+      "definition": "CREATE INDEX ix_fq_quarantine_ticker ON platform.fundamentals_quarterly_quarantine USING btree (ticker, quarantined_at)"
+    },
+    {
+      "table": "ingest_manifest",
+      "index": "ingest_manifest_pkey",
+      "definition": "CREATE UNIQUE INDEX ingest_manifest_pkey ON platform.ingest_manifest USING btree (manifest_id)"
+    },
+    {
+      "table": "ingest_manifest",
+      "index": "ix_ingest_manifest_source_pulled_at",
+      "definition": "CREATE INDEX ix_ingest_manifest_source_pulled_at ON platform.ingest_manifest USING btree (source, pulled_at DESC)"
+    },
+    {
+      "table": "ingest_manifest",
+      "index": "ix_ingest_manifest_status",
+      "definition": "CREATE INDEX ix_ingest_manifest_status ON platform.ingest_manifest USING btree (status) WHERE (status <> 'ok'::text)"
+    },
+    {
+      "table": "ingest_quarantine",
+      "index": "ingest_quarantine_pkey",
+      "definition": "CREATE UNIQUE INDEX ingest_quarantine_pkey ON platform.ingest_quarantine USING btree (quarantine_id)"
+    },
+    {
+      "table": "ingest_quarantine",
+      "index": "ix_ingest_quarantine_retry_pending",
+      "definition": "CREATE INDEX ix_ingest_quarantine_retry_pending ON platform.ingest_quarantine USING btree (retry_status, rejected_at) WHERE (retry_status = 'pending'::text)"
+    },
+    {
+      "table": "ingest_quarantine",
+      "index": "ix_ingest_quarantine_source_rejected_at",
+      "definition": "CREATE INDEX ix_ingest_quarantine_source_rejected_at ON platform.ingest_quarantine USING btree (source, rejected_at DESC)"
+    },
+    {
+      "table": "ingestion_metrics",
+      "index": "ingestion_metrics_pk",
+      "definition": "CREATE UNIQUE INDEX ingestion_metrics_pk ON platform.ingestion_metrics USING btree (source, ingested_at)"
+    },
+    {
+      "table": "insider_sentiment",
+      "index": "insider_sentiment_classification_id_idx",
+      "definition": "CREATE INDEX insider_sentiment_classification_id_idx ON platform.insider_sentiment USING btree (classification_id)"
+    },
+    {
+      "table": "insider_sentiment",
+      "index": "insider_sentiment_pk",
+      "definition": "CREATE UNIQUE INDEX insider_sentiment_pk ON platform.insider_sentiment USING btree (symbol, year, month)"
+    },
+    {
+      "table": "insider_sentiment",
+      "index": "ix_insider_sentiment_symbol_period",
+      "definition": "CREATE INDEX ix_insider_sentiment_symbol_period ON platform.insider_sentiment USING btree (symbol, year, month)"
+    },
+    {
+      "table": "insider_transactions",
+      "index": "insider_transactions_classification_id_idx",
+      "definition": "CREATE INDEX insider_transactions_classification_id_idx ON platform.insider_transactions USING btree (classification_id)"
+    },
+    {
+      "table": "insider_transactions",
+      "index": "insider_transactions_pk",
+      "definition": "CREATE UNIQUE INDEX insider_transactions_pk ON platform.insider_transactions USING btree (ticker, filing_date, insider_name, transaction_type, shares)"
+    },
+    {
+      "table": "insider_transactions",
+      "index": "ix_insider_transactions_filing_date",
+      "definition": "CREATE INDEX ix_insider_transactions_filing_date ON platform.insider_transactions USING btree (filing_date)"
+    },
+    {
+      "table": "insider_transactions",
+      "index": "ix_insider_transactions_ticker_date",
+      "definition": "CREATE INDEX ix_insider_transactions_ticker_date ON platform.insider_transactions USING btree (ticker, filing_date)"
+    },
+    {
+      "table": "issuer_history",
+      "index": "issuer_history_pk",
+      "definition": "CREATE UNIQUE INDEX issuer_history_pk ON platform.issuer_history USING btree (issuer_id, valid_from)"
+    },
+    {
+      "table": "issuer_securities",
+      "index": "issuer_securities_pk",
+      "definition": "CREATE UNIQUE INDEX issuer_securities_pk ON platform.issuer_securities USING btree (issuer_id, classification_id, valid_from)"
+    },
+    {
+      "table": "issuer_securities",
+      "index": "ix_issuer_securities_security",
+      "definition": "CREATE INDEX ix_issuer_securities_security ON platform.issuer_securities USING btree (classification_id, valid_from)"
+    },
+    {
+      "table": "issuers",
+      "index": "issuers_cik_uniq",
+      "definition": "CREATE UNIQUE INDEX issuers_cik_uniq ON platform.issuers USING btree (cik)"
+    },
+    {
+      "table": "issuers",
+      "index": "issuers_lei_uniq",
+      "definition": "CREATE UNIQUE INDEX issuers_lei_uniq ON platform.issuers USING btree (lei)"
+    },
+    {
+      "table": "issuers",
+      "index": "issuers_pk",
+      "definition": "CREATE UNIQUE INDEX issuers_pk ON platform.issuers USING btree (issuer_id)"
+    },
+    {
+      "table": "liquidity_tiers",
+      "index": "liquidity_tiers_classification_id_idx",
+      "definition": "CREATE INDEX liquidity_tiers_classification_id_idx ON platform.liquidity_tiers USING btree (classification_id)"
+    },
+    {
+      "table": "liquidity_tiers",
+      "index": "liquidity_tiers_pkey",
+      "definition": "CREATE UNIQUE INDEX liquidity_tiers_pkey ON platform.liquidity_tiers USING btree (ticker)"
+    },
+    {
+      "table": "macro_data",
+      "index": "ix_macro_data_latest",
+      "definition": "CREATE INDEX ix_macro_data_latest ON platform.macro_data USING btree (series_id, observed_date DESC) WHERE (realtime_end = 'infinity'::timestamp with time zone)"
+    },
+    {
+      "table": "macro_data",
+      "index": "ix_macro_data_pit",
+      "definition": "CREATE INDEX ix_macro_data_pit ON platform.macro_data USING gist (series_id, tstzrange(realtime_start, realtime_end))"
+    },
+    {
+      "table": "macro_data",
+      "index": "ix_macro_data_source",
+      "definition": "CREATE INDEX ix_macro_data_source ON platform.macro_data USING btree (source, observed_date DESC) WHERE (realtime_end = 'infinity'::timestamp with time zone)"
+    },
+    {
+      "table": "macro_data",
+      "index": "macro_data_pit_pk",
+      "definition": "CREATE UNIQUE INDEX macro_data_pit_pk ON platform.macro_data USING btree (source, series_id, observed_date, realtime_start)"
+    },
+    {
+      "table": "open_orders",
+      "index": "open_orders_alpaca_order_id_idx",
+      "definition": "CREATE INDEX open_orders_alpaca_order_id_idx ON platform.open_orders USING btree (alpaca_order_id) WHERE (alpaca_order_id IS NOT NULL)"
+    },
+    {
+      "table": "open_orders",
+      "index": "open_orders_engine_status_idx",
+      "definition": "CREATE INDEX open_orders_engine_status_idx ON platform.open_orders USING btree (engine, status)"
+    },
+    {
+      "table": "open_orders",
+      "index": "open_orders_engine_trade_type_uq",
+      "definition": "CREATE UNIQUE INDEX open_orders_engine_trade_type_uq ON platform.open_orders USING btree (engine, trade_id, order_type)"
+    },
+    {
+      "table": "open_orders",
+      "index": "open_orders_pkey",
+      "definition": "CREATE UNIQUE INDEX open_orders_pkey ON platform.open_orders USING btree (id)"
+    },
+    {
+      "table": "options_max_pain",
+      "index": "ix_options_max_pain_symbol_observed",
+      "definition": "CREATE INDEX ix_options_max_pain_symbol_observed ON platform.options_max_pain USING btree (symbol, observed_date)"
+    },
+    {
+      "table": "options_max_pain",
+      "index": "options_max_pain_classification_id_idx",
+      "definition": "CREATE INDEX options_max_pain_classification_id_idx ON platform.options_max_pain USING btree (classification_id)"
+    },
+    {
+      "table": "options_max_pain",
+      "index": "options_max_pain_pk",
+      "definition": "CREATE UNIQUE INDEX options_max_pain_pk ON platform.options_max_pain USING btree (symbol, expiration_date, observed_date)"
+    },
+    {
+      "table": "parity_drift_log",
+      "index": "parity_drift_log_pkey",
+      "definition": "CREATE UNIQUE INDEX parity_drift_log_pkey ON platform.parity_drift_log USING btree (id)"
+    },
+    {
+      "table": "prices_daily",
+      "index": "idx_prices_daily_date",
+      "definition": "CREATE INDEX idx_prices_daily_date ON platform.prices_daily USING btree (date)"
+    },
+    {
+      "table": "prices_daily",
+      "index": "idx_prices_daily_row_integrity_violations",
+      "definition": "CREATE INDEX idx_prices_daily_row_integrity_violations ON platform.prices_daily USING btree (date, ticker) WHERE ((close IS NULL) OR (close <= (0)::numeric) OR (close > (100000000)::numeric) OR (open IS NULL) OR (high IS NULL) OR (low IS NULL) OR (high < GREATEST(open, close, low)) OR (low > LEAST(open, close, high)) OR (volume IS NULL) OR (volume < 0))"
+    },
+    {
+      "table": "prices_daily",
+      "index": "idx_prices_daily_ticker_date_desc",
+      "definition": "CREATE INDEX idx_prices_daily_ticker_date_desc ON platform.prices_daily USING btree (ticker, date DESC)"
+    },
+    {
+      "table": "prices_daily",
+      "index": "prices_daily_active_universe_idx",
+      "definition": "CREATE INDEX prices_daily_active_universe_idx ON platform.prices_daily USING btree (date, ticker) WHERE (delisted = false)"
+    },
+    {
+      "table": "prices_daily",
+      "index": "prices_daily_classification_id_idx",
+      "definition": "CREATE INDEX prices_daily_classification_id_idx ON platform.prices_daily USING btree (classification_id)"
+    },
+    {
+      "table": "prices_daily",
+      "index": "prices_daily_pkey",
+      "definition": "CREATE UNIQUE INDEX prices_daily_pkey ON platform.prices_daily USING btree (ticker, date)"
+    },
+    {
+      "table": "prices_daily_staging",
+      "index": "ix_prices_daily_staging_run",
+      "definition": "CREATE INDEX ix_prices_daily_staging_run ON platform.prices_daily_staging USING btree (staging_run_id) WHERE (promoted = false)"
+    },
+    {
+      "table": "prices_daily_staging",
+      "index": "ix_prices_daily_staging_staged_at",
+      "definition": "CREATE INDEX ix_prices_daily_staging_staged_at ON platform.prices_daily_staging USING btree (staged_at) WHERE (promoted = false)"
+    },
+    {
+      "table": "prices_daily_staging",
+      "index": "prices_daily_staging_pkey",
+      "definition": "CREATE UNIQUE INDEX prices_daily_staging_pkey ON platform.prices_daily_staging USING btree (staging_run_id, ticker, date)"
+    },
+    {
+      "table": "prices_daily_tickers",
+      "index": "idx_prices_daily_tickers_ticker",
+      "definition": "CREATE UNIQUE INDEX idx_prices_daily_tickers_ticker ON platform.prices_daily_tickers USING btree (ticker)"
+    },
+    {
+      "table": "provider_binding_state",
+      "index": "provider_binding_state_pkey",
+      "definition": "CREATE UNIQUE INDEX provider_binding_state_pkey ON platform.provider_binding_state USING btree (feed)"
+    },
+    {
+      "table": "risk_close_ledger",
+      "index": "risk_close_ledger_pkey",
+      "definition": "CREATE UNIQUE INDEX risk_close_ledger_pkey ON platform.risk_close_ledger USING btree (engine, trade_id)"
+    },
+    {
+      "table": "risk_state",
+      "index": "risk_state_pkey",
+      "definition": "CREATE UNIQUE INDEX risk_state_pkey ON platform.risk_state USING btree (engine)"
+    },
+    {
+      "table": "sec_insider_row_counts_snapshot",
+      "index": "sec_insider_row_counts_snapshot_pk",
+      "definition": "CREATE UNIQUE INDEX sec_insider_row_counts_snapshot_pk ON platform.sec_insider_row_counts_snapshot USING btree (ticker)"
+    },
+    {
+      "table": "sec_material_events",
+      "index": "ix_sec_material_events_filing_date",
+      "definition": "CREATE INDEX ix_sec_material_events_filing_date ON platform.sec_material_events USING btree (filing_date)"
+    },
+    {
+      "table": "sec_material_events",
+      "index": "ix_sec_material_events_ticker_date",
+      "definition": "CREATE INDEX ix_sec_material_events_ticker_date ON platform.sec_material_events USING btree (ticker, filing_date)"
+    },
+    {
+      "table": "sec_material_events",
+      "index": "sec_material_events_classification_id_idx",
+      "definition": "CREATE INDEX sec_material_events_classification_id_idx ON platform.sec_material_events USING btree (classification_id)"
+    },
+    {
+      "table": "sec_material_events",
+      "index": "sec_material_events_pk",
+      "definition": "CREATE UNIQUE INDEX sec_material_events_pk ON platform.sec_material_events USING btree (ticker, filing_date, event_type)"
+    },
+    {
+      "table": "series_catalog",
+      "index": "ix_series_catalog_freq",
+      "definition": "CREATE INDEX ix_series_catalog_freq ON platform.series_catalog USING btree (frequency)"
+    },
+    {
+      "table": "series_catalog",
+      "index": "ix_series_catalog_source",
+      "definition": "CREATE INDEX ix_series_catalog_source ON platform.series_catalog USING btree (source)"
+    },
+    {
+      "table": "series_catalog",
+      "index": "series_catalog_pk",
+      "definition": "CREATE UNIQUE INDEX series_catalog_pk ON platform.series_catalog USING btree (source, series_id)"
+    },
+    {
+      "table": "short_interest",
+      "index": "ix_short_interest_release",
+      "definition": "CREATE INDEX ix_short_interest_release ON platform.short_interest USING btree (release_date, ticker)"
+    },
+    {
+      "table": "short_interest",
+      "index": "short_interest_classification_id_idx",
+      "definition": "CREATE INDEX short_interest_classification_id_idx ON platform.short_interest USING btree (classification_id)"
+    },
+    {
+      "table": "short_interest",
+      "index": "short_interest_pk",
+      "definition": "CREATE UNIQUE INDEX short_interest_pk ON platform.short_interest USING btree (ticker, settlement_date)"
+    },
+    {
+      "table": "social_sentiment",
+      "index": "ix_social_sentiment_date_ticker",
+      "definition": "CREATE INDEX ix_social_sentiment_date_ticker ON platform.social_sentiment USING btree (date, ticker)"
+    },
+    {
+      "table": "social_sentiment",
+      "index": "social_sentiment_classification_id_idx",
+      "definition": "CREATE INDEX social_sentiment_classification_id_idx ON platform.social_sentiment USING btree (classification_id)"
+    },
+    {
+      "table": "social_sentiment",
+      "index": "social_sentiment_pk",
+      "definition": "CREATE UNIQUE INDEX social_sentiment_pk ON platform.social_sentiment USING btree (ticker, date)"
+    },
+    {
+      "table": "split_pre_image_log",
+      "index": "ix_split_pre_image_log_rejected",
+      "definition": "CREATE INDEX ix_split_pre_image_log_rejected ON platform.split_pre_image_log USING btree (rejected_reason) WHERE (rejected_reason IS NOT NULL)"
+    },
+    {
+      "table": "split_pre_image_log",
+      "index": "ix_split_pre_image_log_ticker_date",
+      "definition": "CREATE INDEX ix_split_pre_image_log_ticker_date ON platform.split_pre_image_log USING btree (ticker, action_date DESC)"
+    },
+    {
+      "table": "split_pre_image_log",
+      "index": "split_pre_image_log_pkey",
+      "definition": "CREATE UNIQUE INDEX split_pre_image_log_pkey ON platform.split_pre_image_log USING btree (pre_image_id)"
+    },
+    {
+      "table": "spread_observations",
+      "index": "spread_observations_classification_id_idx",
+      "definition": "CREATE INDEX spread_observations_classification_id_idx ON platform.spread_observations USING btree (classification_id)"
+    },
+    {
+      "table": "spread_observations",
+      "index": "spread_observations_pkey",
+      "definition": "CREATE UNIQUE INDEX spread_observations_pkey ON platform.spread_observations USING btree (id)"
+    },
+    {
+      "table": "spread_observations",
+      "index": "spread_observations_source_observed_idx",
+      "definition": "CREATE INDEX spread_observations_source_observed_idx ON platform.spread_observations USING btree (source, observed_at)"
+    },
+    {
+      "table": "spread_observations",
+      "index": "spread_observations_ticker_observed_idx",
+      "definition": "CREATE INDEX spread_observations_ticker_observed_idx ON platform.spread_observations USING btree (ticker, observed_at)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "idx_ticker_classifications_country",
+      "definition": "CREATE INDEX idx_ticker_classifications_country ON platform.ticker_classifications USING btree (country) WHERE (country IS NOT NULL)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ix_ticker_classifications_asset_class_subtype",
+      "definition": "CREATE INDEX ix_ticker_classifications_asset_class_subtype ON platform.ticker_classifications USING btree (asset_class, instrument_subtype) WHERE (asset_class IS NOT NULL)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ix_ticker_classifications_etf",
+      "definition": "CREATE INDEX ix_ticker_classifications_etf ON platform.ticker_classifications USING btree (asset_class, etf_inverse) WHERE (asset_class = 'etf'::text)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ix_ticker_classifications_issuer_lifecycle",
+      "definition": "CREATE INDEX ix_ticker_classifications_issuer_lifecycle ON platform.ticker_classifications USING btree (issuer_lifecycle_state, country) WHERE (issuer_lifecycle_state IS NOT NULL)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ix_ticker_classifications_sec_doctype",
+      "definition": "CREATE INDEX ix_ticker_classifications_sec_doctype ON platform.ticker_classifications USING btree (sec_document_type_primary, country) WHERE (sec_document_type_primary IS NOT NULL)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "tc_ticker_active_uniq",
+      "definition": "CREATE UNIQUE INDEX tc_ticker_active_uniq ON platform.ticker_classifications USING btree (ticker) WHERE (lifetime_end IS NULL)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "tc_ticker_lifetime",
+      "definition": "CREATE INDEX tc_ticker_lifetime ON platform.ticker_classifications USING btree (ticker, lifetime_start, lifetime_end)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ticker_classifications_cik_idx",
+      "definition": "CREATE INDEX ticker_classifications_cik_idx ON platform.ticker_classifications USING btree (cik) WHERE (cik IS NOT NULL)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ticker_classifications_current_ticker_active_uniq",
+      "definition": "CREATE UNIQUE INDEX ticker_classifications_current_ticker_active_uniq ON platform.ticker_classifications USING btree (current_ticker) WHERE (status = ANY (ARRAY['active'::text, 'active_when_issued'::text]))"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ticker_classifications_cusip_idx",
+      "definition": "CREATE INDEX ticker_classifications_cusip_idx ON platform.ticker_classifications USING btree (cusip) WHERE (cusip IS NOT NULL)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ticker_classifications_figi_idx",
+      "definition": "CREATE INDEX ticker_classifications_figi_idx ON platform.ticker_classifications USING btree (figi) WHERE (figi IS NOT NULL)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ticker_classifications_id_uniq",
+      "definition": "CREATE UNIQUE INDEX ticker_classifications_id_uniq ON platform.ticker_classifications USING btree (id)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ticker_classifications_isin_idx",
+      "definition": "CREATE INDEX ticker_classifications_isin_idx ON platform.ticker_classifications USING btree (isin) WHERE (isin IS NOT NULL)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ticker_classifications_pkey",
+      "definition": "CREATE UNIQUE INDEX ticker_classifications_pkey ON platform.ticker_classifications USING btree (id)"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ticker_classifications_tkr14_asset_class_idx",
+      "definition": "CREATE INDEX ticker_classifications_tkr14_asset_class_idx ON platform.ticker_classifications USING btree (\"substring\"(id, 3, 1))"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ticker_classifications_tkr14_country_idx",
+      "definition": "CREATE INDEX ticker_classifications_tkr14_country_idx ON platform.ticker_classifications USING btree (\"substring\"(id, 1, 2))"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ticker_classifications_tkr14_discovery_src_idx",
+      "definition": "CREATE INDEX ticker_classifications_tkr14_discovery_src_idx ON platform.ticker_classifications USING btree (\"substring\"(id, 7, 1))"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ticker_classifications_tkr14_discovery_yy_idx",
+      "definition": "CREATE INDEX ticker_classifications_tkr14_discovery_yy_idx ON platform.ticker_classifications USING btree (\"substring\"(id, 5, 2))"
+    },
+    {
+      "table": "ticker_classifications",
+      "index": "ticker_classifications_tkr14_ipo_venue_idx",
+      "definition": "CREATE INDEX ticker_classifications_tkr14_ipo_venue_idx ON platform.ticker_classifications USING btree (\"substring\"(id, 4, 1))"
+    },
+    {
+      "table": "ticker_classifications_source_count",
+      "index": "ticker_classifications_source_count_pk",
+      "definition": "CREATE UNIQUE INDEX ticker_classifications_source_count_pk ON platform.ticker_classifications_source_count USING btree (snapshot_at)"
+    },
+    {
+      "table": "ticker_history",
+      "index": "ticker_history_no_overlap",
+      "definition": "CREATE INDEX ticker_history_no_overlap ON platform.ticker_history USING gist (classification_id, daterange(valid_from, COALESCE(valid_to, 'infinity'::date), '[)'::text))"
+    },
+    {
+      "table": "ticker_history",
+      "index": "ticker_history_pkey",
+      "definition": "CREATE UNIQUE INDEX ticker_history_pkey ON platform.ticker_history USING btree (classification_id, valid_from)"
+    },
+    {
+      "table": "ticker_history",
+      "index": "ticker_history_ticker_active_idx",
+      "definition": "CREATE INDEX ticker_history_ticker_active_idx ON platform.ticker_history USING btree (ticker) WHERE (valid_to IS NULL)"
+    },
+    {
+      "table": "ticker_history",
+      "index": "ticker_history_ticker_valid_from_idx",
+      "definition": "CREATE INDEX ticker_history_ticker_valid_from_idx ON platform.ticker_history USING btree (ticker, valid_from DESC)"
+    },
+    {
+      "table": "ticker_lifecycle_events",
+      "index": "ix_ticker_lifecycle_events_cid_filing",
+      "definition": "CREATE INDEX ix_ticker_lifecycle_events_cid_filing ON platform.ticker_lifecycle_events USING btree (classification_id, filing_date DESC NULLS LAST)"
+    },
+    {
+      "table": "ticker_lifecycle_events",
+      "index": "ticker_lifecycle_events_pkey",
+      "definition": "CREATE UNIQUE INDEX ticker_lifecycle_events_pkey ON platform.ticker_lifecycle_events USING btree (id)"
+    },
+    {
+      "table": "ticker_lifecycle_events",
+      "index": "ux_ticker_lifecycle_events_cid_form_acc",
+      "definition": "CREATE UNIQUE INDEX ux_ticker_lifecycle_events_cid_form_acc ON platform.ticker_lifecycle_events USING btree (classification_id, form_type, accession_number) WHERE (accession_number IS NOT NULL)"
+    },
+    {
+      "table": "tradier_options_chains",
+      "index": "ix_tradier_options_ticker_exp",
+      "definition": "CREATE INDEX ix_tradier_options_ticker_exp ON platform.tradier_options_chains USING btree (ticker, expiration_date)"
+    },
+    {
+      "table": "tradier_options_chains",
+      "index": "pk_tradier_options_chains",
+      "definition": "CREATE UNIQUE INDEX pk_tradier_options_chains ON platform.tradier_options_chains USING btree (ticker, expiration_date, strike, option_type)"
+    },
+    {
+      "table": "universe_candidates",
+      "index": "idx_uc_engine_date",
+      "definition": "CREATE INDEX idx_uc_engine_date ON platform.universe_candidates USING btree (engine, as_of_date)"
+    },
+    {
+      "table": "universe_candidates",
+      "index": "idx_universe_candidates_ticker",
+      "definition": "CREATE INDEX idx_universe_candidates_ticker ON platform.universe_candidates USING btree (ticker)"
+    },
+    {
+      "table": "universe_candidates",
+      "index": "universe_candidates_classification_id_idx",
+      "definition": "CREATE INDEX universe_candidates_classification_id_idx ON platform.universe_candidates USING btree (classification_id)"
+    },
+    {
+      "table": "universe_candidates",
+      "index": "universe_candidates_pkey",
+      "definition": "CREATE UNIQUE INDEX universe_candidates_pkey ON platform.universe_candidates USING btree (as_of_date, engine, ticker)"
+    }
+  ],
+  "triggers": [
+    {
+      "table": "aar_events",
+      "trigger": "tg_aar_events_classification_id",
+      "definition": "CREATE TRIGGER tg_aar_events_classification_id BEFORE INSERT ON platform.aar_events FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_aar_events()"
+    },
+    {
+      "table": "borrow_rates",
+      "trigger": "tg_borrow_rates_classification_id",
+      "definition": "CREATE TRIGGER tg_borrow_rates_classification_id BEFORE INSERT ON platform.borrow_rates FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_borrow_rates()"
+    },
+    {
+      "table": "corporate_actions",
+      "trigger": "tg_corporate_actions_classification_id",
+      "definition": "CREATE TRIGGER tg_corporate_actions_classification_id BEFORE INSERT ON platform.corporate_actions FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_corporate_actions()"
+    },
+    {
+      "table": "earnings_events",
+      "trigger": "tg_earnings_events_classification_id",
+      "definition": "CREATE TRIGGER tg_earnings_events_classification_id BEFORE INSERT ON platform.earnings_events FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_earnings_events()"
+    },
+    {
+      "table": "fundamentals_period_source_evidence",
+      "trigger": "fundamentals_period_source_evidence_updated_at_trg",
+      "definition": "CREATE TRIGGER fundamentals_period_source_evidence_updated_at_trg BEFORE UPDATE ON platform.fundamentals_period_source_evidence FOR EACH ROW EXECUTE FUNCTION platform.fundamentals_period_source_evidence_touch_updated_at()"
+    },
+    {
+      "table": "fundamentals_quarterly",
+      "trigger": "tg_fundamentals_quarterly_classification_id",
+      "definition": "CREATE TRIGGER tg_fundamentals_quarterly_classification_id BEFORE INSERT ON platform.fundamentals_quarterly FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_fundamentals_quarterly()"
+    },
+    {
+      "table": "insider_sentiment",
+      "trigger": "tg_insider_sentiment_classification_id",
+      "definition": "CREATE TRIGGER tg_insider_sentiment_classification_id BEFORE INSERT ON platform.insider_sentiment FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_insider_sentiment()"
+    },
+    {
+      "table": "insider_transactions",
+      "trigger": "tg_insider_transactions_classification_id",
+      "definition": "CREATE TRIGGER tg_insider_transactions_classification_id BEFORE INSERT ON platform.insider_transactions FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_insider_transactions()"
+    },
+    {
+      "table": "liquidity_tiers",
+      "trigger": "tg_liquidity_tiers_classification_id",
+      "definition": "CREATE TRIGGER tg_liquidity_tiers_classification_id BEFORE INSERT ON platform.liquidity_tiers FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_liquidity_tiers()"
+    },
+    {
+      "table": "options_max_pain",
+      "trigger": "tg_options_max_pain_classification_id",
+      "definition": "CREATE TRIGGER tg_options_max_pain_classification_id BEFORE INSERT ON platform.options_max_pain FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_options_max_pain()"
+    },
+    {
+      "table": "prices_daily",
+      "trigger": "tg_prices_daily_classification_id",
+      "definition": "CREATE TRIGGER tg_prices_daily_classification_id BEFORE INSERT ON platform.prices_daily FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_prices_daily()"
+    },
+    {
+      "table": "sec_material_events",
+      "trigger": "tg_sec_material_events_classification_id",
+      "definition": "CREATE TRIGGER tg_sec_material_events_classification_id BEFORE INSERT ON platform.sec_material_events FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_sec_material_events()"
+    },
+    {
+      "table": "short_interest",
+      "trigger": "tg_short_interest_classification_id",
+      "definition": "CREATE TRIGGER tg_short_interest_classification_id BEFORE INSERT ON platform.short_interest FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_short_interest()"
+    },
+    {
+      "table": "social_sentiment",
+      "trigger": "tg_social_sentiment_classification_id",
+      "definition": "CREATE TRIGGER tg_social_sentiment_classification_id BEFORE INSERT ON platform.social_sentiment FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_social_sentiment()"
+    },
+    {
+      "table": "spread_observations",
+      "trigger": "spread_observations_retention_trg",
+      "definition": "CREATE TRIGGER spread_observations_retention_trg AFTER INSERT ON platform.spread_observations FOR EACH STATEMENT EXECUTE FUNCTION platform._spread_observations_retention()"
+    },
+    {
+      "table": "spread_observations",
+      "trigger": "tg_spread_observations_classification_id",
+      "definition": "CREATE TRIGGER tg_spread_observations_classification_id BEFORE INSERT ON platform.spread_observations FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_spread_observations()"
+    },
+    {
+      "table": "universe_candidates",
+      "trigger": "tg_universe_candidates_classification_id",
+      "definition": "CREATE TRIGGER tg_universe_candidates_classification_id BEFORE INSERT ON platform.universe_candidates FOR EACH ROW EXECUTE FUNCTION platform.tg_set_classification_id_universe_candidates()"
+    }
+  ],
+  "tables_without_pk": [],
+  "columns_by_table": {
+    "aar_deferred": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": "NO",
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "engine",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "trade_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "aar_data",
+        "type": "jsonb",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "defer_reason",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "replayed_at",
+        "type": "timestamp with time zone",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "aar_events": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": "nextval('platform.aar_events_id_seq'::regclass)"
+      },
+      {
+        "name": "engine",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "trade_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "aar_data",
+        "type": "jsonb",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "alembic_version": [
+      {
+        "name": "version_num",
+        "type": "character varying",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "allocations": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": "nextval('platform.allocations_id_seq'::regclass)"
+      },
+      {
+        "name": "engine",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "allocated_capital",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "allocation_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "weight",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "prior_equity",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "realized_vol",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "freeze_state",
+        "type": "text",
+        "nullable": "NO",
+        "default": "'active'::text"
+      },
+      {
+        "name": "freeze_reason",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "drawdown_pct",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "decided_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "application_log": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": "NO",
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "engine",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "run_id",
+        "type": "uuid",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "event_type",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "severity",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "message",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "data",
+        "type": "jsonb",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "borrow_rates": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "borrow_rate_pct",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "corporate_actions": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": "nextval('platform.corporate_actions_id_seq'::regclass)"
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "action_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "action_type",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "ratio",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "raw_data",
+        "type": "jsonb",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "corporate_events": [
+      {
+        "name": "event_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "event_kind",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "event_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "announced_date",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "predecessor_cls_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "successor_cls_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "predecessor_issuer_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "successor_issuer_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "successor_external",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "ratio_num",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "ratio_den",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "cash_per_share",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "extra_terms",
+        "type": "jsonb",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "source_filing_url",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "notes",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "realtime_start",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "realtime_end",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "'infinity'::timestamp with time zone"
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "daemon_heartbeats": [
+      {
+        "name": "daemon_name",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "last_heartbeat",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": "NO",
+        "default": "'healthy'::text"
+      },
+      {
+        "name": "extra",
+        "type": "jsonb",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "data_quality_log": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": "nextval('platform.data_quality_log_id_seq'::regclass)"
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "timestamp",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "latency_ms",
+        "type": "integer",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "missing_bars",
+        "type": "integer",
+        "nullable": "NO",
+        "default": "0"
+      },
+      {
+        "name": "stale",
+        "type": "boolean",
+        "nullable": "NO",
+        "default": "false"
+      },
+      {
+        "name": "confidence",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "notes",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "earnings_events": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "event_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "event_type",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "magnitude_pct",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": "'fmp'::text"
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "earnings_events_count_snapshot": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "beat_count",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "snapshot_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "failed_alpha_ledger": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": "nextval('platform.failed_alpha_ledger_id_seq'::regclass)"
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "engine",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "strategy_family",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "sweep_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "run_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "commit_sha",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "source_doc",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "data_window_start",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "data_window_end",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "universe",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "n_trials",
+        "type": "integer",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "n_trades",
+        "type": "integer",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "parameter_count",
+        "type": "integer",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "dsr",
+        "type": "double precision",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "psr_at_zero",
+        "type": "double precision",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "pbo",
+        "type": "double precision",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "min_btl_periods",
+        "type": "integer",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "backtest_periods",
+        "type": "integer",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "credibility_score",
+        "type": "integer",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "max_drawdown",
+        "type": "double precision",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "sharpe",
+        "type": "double precision",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "turnover",
+        "type": "double precision",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "cost_assumption_bps",
+        "type": "double precision",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "blocking_constraint",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "blocking_metric",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "failure_summary",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "revisit_condition",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": "NO",
+        "default": "'FAILED'::text"
+      },
+      {
+        "name": "metadata",
+        "type": "jsonb",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "forensics_triggers": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": "nextval('platform.coroner_triggers_id_seq'::regclass)"
+      },
+      {
+        "name": "trigger_kind",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "fired_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "resolved_at",
+        "type": "timestamp with time zone",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "fundamentals_period_source_evidence": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "period_end_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "outcome",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "attempted_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "notes",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "fundamentals_quarterly": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": "nextval('platform.fundamentals_quarterly_id_seq'::regclass)"
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "filing_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "period_end_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "period_label",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "net_income",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "fcf",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "operating_cash_flow",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "capex",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "revenue",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "total_assets",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "total_liabilities",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "current_assets",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "current_liabilities",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "receivables",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "cash_and_equivalents",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "shares_outstanding",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "pb",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "de",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "fundamentals_quarterly_archive": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": "nextval('platform.fundamentals_quarterly_archive_id_seq'::regclass)"
+      },
+      {
+        "name": "original_id",
+        "type": "bigint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "filing_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "period_end_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "period_label",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "net_income",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "fcf",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "operating_cash_flow",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "capex",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "revenue",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "total_assets",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "total_liabilities",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "current_assets",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "current_liabilities",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "receivables",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "cash_and_equivalents",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "shares_outstanding",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "pb",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "de",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "classification_id",
+        "type": "bigint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "archived_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "disposition_reason",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "decided_by_run_id",
+        "type": "uuid",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "evidence_summary",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "fundamentals_quarterly_quarantine": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": "nextval('platform.fundamentals_quarterly_quarantine_id_seq'::regclass)"
+      },
+      {
+        "name": "original_id",
+        "type": "bigint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "filing_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "period_end_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "period_label",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "net_income",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "fcf",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "operating_cash_flow",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "capex",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "revenue",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "total_assets",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "total_liabilities",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "current_assets",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "current_liabilities",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "receivables",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "cash_and_equivalents",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "shares_outstanding",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "pb",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "de",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "classification_id",
+        "type": "bigint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "quarantined_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "disposition",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "decided_by_run_id",
+        "type": "uuid",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "evidence_summary",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "promoted_back_at",
+        "type": "timestamp with time zone",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "ingest_manifest": [
+      {
+        "name": "manifest_id",
+        "type": "uuid",
+        "nullable": "NO",
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "provider",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "pulled_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "source_locator",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "expected_rows",
+        "type": "bigint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "actual_rows",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "checksum",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "date_range_start",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "date_range_end",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "notes",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "ingest_quarantine": [
+      {
+        "name": "quarantine_id",
+        "type": "uuid",
+        "nullable": "NO",
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "target_table",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "payload",
+        "type": "jsonb",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "error_message",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "error_kind",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "rejected_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "retry_count",
+        "type": "integer",
+        "nullable": "NO",
+        "default": "0"
+      },
+      {
+        "name": "retry_status",
+        "type": "text",
+        "nullable": "NO",
+        "default": "'pending'::text"
+      },
+      {
+        "name": "manifest_id",
+        "type": "uuid",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "ingestion_metrics": [
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "ingested_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "row_count",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "insider_mspr_daily": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "filing_date",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "buy_value",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "sell_value",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "mspr",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "n_transactions",
+        "type": "bigint",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "insider_sentiment": [
+      {
+        "name": "symbol",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "year",
+        "type": "integer",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "month",
+        "type": "integer",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "mspr",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "net_change",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "insider_transactions": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "filing_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "insider_name",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "transaction_type",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "shares",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "price",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "value",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": "'sec'::text"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "issuer_history": [
+      {
+        "name": "issuer_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "cik",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "legal_name",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "valid_from",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "valid_to",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "issuer_securities": [
+      {
+        "name": "issuer_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "valid_from",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "valid_to",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "issuers": [
+      {
+        "name": "issuer_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "cik",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "lei",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "legal_name",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "country_of_incorp",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": "NO",
+        "default": "'active'::text"
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "liquidity_tiers": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "tier",
+        "type": "integer",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "median_spread_pct",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "p95_spread_pct",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "observations",
+        "type": "integer",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "provisional",
+        "type": "boolean",
+        "nullable": "NO",
+        "default": "true"
+      },
+      {
+        "name": "last_updated",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "listings_v": [
+      {
+        "name": "listing_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "security_id",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "issuer_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "exchange",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "country",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "ipo_venue",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "discovery_source",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "macro_data": [
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "series_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "observed_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "value_num",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "value_text",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "realtime_start",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "realtime_end",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "'infinity'::timestamp with time zone"
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "open_orders": [
+      {
+        "name": "id",
+        "type": "uuid",
+        "nullable": "NO",
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "engine",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "trade_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "order_type",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "alpaca_order_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": "NO",
+        "default": "'pending'::text"
+      },
+      {
+        "name": "fill_price",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "filled_at",
+        "type": "timestamp with time zone",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "decision_data",
+        "type": "jsonb",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "options_max_pain": [
+      {
+        "name": "symbol",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "expiration_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "observed_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "dte",
+        "type": "integer",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "spot_price",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "max_pain_strike",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "total_pain_at_max",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "spot_distance",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "spot_distance_pct",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "observed_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "parity_drift_log": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": "nextval('platform.parity_drift_log_id_seq'::regclass)"
+      },
+      {
+        "name": "client_order_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "paper_fill_price",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "live_fill_price",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "drift_bps",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "paper_filled_at",
+        "type": "timestamp with time zone",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "live_filled_at",
+        "type": "timestamp with time zone",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "timestamp",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "spread_at_order_pct",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "spread_observed_at",
+        "type": "timestamp with time zone",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "prices_daily": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "open",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "high",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "low",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "close",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "volume",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "adjusted_close",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "delisted",
+        "type": "boolean",
+        "nullable": "NO",
+        "default": "false"
+      },
+      {
+        "name": "delisting_date",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": "'alpaca'::text"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "prices_daily_staging": [
+      {
+        "name": "staging_run_id",
+        "type": "uuid",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "open",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "high",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "low",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "close",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "volume",
+        "type": "bigint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "adjusted_close",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "delisted",
+        "type": "boolean",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "delisting_date",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "staged_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "promoted",
+        "type": "boolean",
+        "nullable": "NO",
+        "default": "false"
+      }
+    ],
+    "provider_binding_state": [
+      {
+        "name": "feed",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "active_provider",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "reason",
+        "type": "text",
+        "nullable": "NO",
+        "default": "''::text"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "risk_close_ledger": [
+      {
+        "name": "engine",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "trade_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "risk_state": [
+      {
+        "name": "engine",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "engine_equity",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "daily_pnl",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": "0"
+      },
+      {
+        "name": "weekly_pnl",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": "0"
+      },
+      {
+        "name": "open_positions",
+        "type": "integer",
+        "nullable": "NO",
+        "default": "0"
+      },
+      {
+        "name": "daily_reset_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "weekly_reset_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "kill_switch_active",
+        "type": "boolean",
+        "nullable": "NO",
+        "default": "false"
+      },
+      {
+        "name": "kill_switch_reason",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "sec_insider_row_counts_snapshot": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "rowcount",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "snapshot_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "sec_material_events": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "filing_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "event_type",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "securities_v": [
+      {
+        "name": "security_id",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "cusip",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "isin",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "composite_figi",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "security_type",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "issuer_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "series_catalog": [
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "series_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "vendor_series_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "description",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "unit",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "frequency",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "publish_weekday",
+        "type": "smallint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "publish_day_of_month",
+        "type": "smallint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "publish_lag_days",
+        "type": "smallint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "is_seasonally_adjusted",
+        "type": "boolean",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "is_derived",
+        "type": "boolean",
+        "nullable": "NO",
+        "default": "false"
+      },
+      {
+        "name": "sacred",
+        "type": "boolean",
+        "nullable": "NO",
+        "default": "false"
+      },
+      {
+        "name": "publication_calendar_url",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "notes",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "short_interest": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "settlement_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "release_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "short_interest_pct",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "days_to_cover",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "social_sentiment": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "mentions",
+        "type": "integer",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "upvotes",
+        "type": "integer",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "rank",
+        "type": "integer",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "rank_24h_ago",
+        "type": "integer",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "mentions_24h_ago",
+        "type": "integer",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "split_pre_image_log": [
+      {
+        "name": "pre_image_id",
+        "type": "uuid",
+        "nullable": "NO",
+        "default": "gen_random_uuid()"
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "action_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "ratio",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "captured_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "n_rows_to_update",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "close_before",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "close_after",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "observed_ratio",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "pre_image_sample",
+        "type": "jsonb",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "applied",
+        "type": "boolean",
+        "nullable": "NO",
+        "default": "false"
+      },
+      {
+        "name": "applied_at",
+        "type": "timestamp with time zone",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "n_rows_actually_updated",
+        "type": "bigint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "rejected_reason",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "spread_observations": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "spread_pct",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "observed_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "session",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "recorded_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "ticker_classifications": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "asset_class",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "etf_inverse",
+        "type": "boolean",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "etf_leverage",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "etf_category",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "last_updated",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "country",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "figi",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "cusip",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "isin",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "current_ticker",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "current_exchange",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "current_legal_name",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "gics_sector",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "ipo_venue",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "discovery_source",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "cik",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": "NO",
+        "default": "'active'::text"
+      },
+      {
+        "name": "updated_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "lifetime_start",
+        "type": "date",
+        "nullable": "NO",
+        "default": "'1900-01-01'::date"
+      },
+      {
+        "name": "lifetime_end",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "instrument_subtype",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "sec_document_type_primary",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "sec_document_type_history",
+        "type": "jsonb",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "first_public_filing_date",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "fiscal_year_end_month",
+        "type": "smallint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "last_filing_date",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "metadata_source",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "metadata_updated_at",
+        "type": "timestamp with time zone",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "cik_source",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "issuer_lifecycle_state",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "issuer_lifecycle_state_source",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "issuer_lifecycle_event_date",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "issuer_lifecycle_evidence_url",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "issuer_lifecycle_updated_at",
+        "type": "timestamp with time zone",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "ticker_classifications_source_count": [
+      {
+        "name": "snapshot_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "source_count",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "ticker_history": [
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "valid_from",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "valid_to",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      }
+    ],
+    "ticker_lifecycle_events": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO",
+        "default": "nextval('platform.ticker_lifecycle_events_id_seq'::regclass)"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "form_type",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "filing_date",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "report_date",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "accession_number",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "source",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "evidence_url",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "ingested_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      }
+    ],
+    "tradier_options_chains": [
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "expiration_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "strike",
+        "type": "numeric",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "option_type",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "bid",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "ask",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "last",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "volume",
+        "type": "bigint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "open_interest",
+        "type": "bigint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "retrieved_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "universe_candidates": [
+      {
+        "name": "as_of_date",
+        "type": "date",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "engine",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "ticker",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      },
+      {
+        "name": "tier",
+        "type": "smallint",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "last_close",
+        "type": "numeric",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "reason",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "created_at",
+        "type": "timestamp with time zone",
+        "nullable": "NO",
+        "default": "now()"
+      },
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "NO",
+        "default": null
+      }
+    ],
+    "v_universe": [
+      {
+        "name": "classification_id",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "ticker_at_date",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "current_ticker",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "asset_class",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "country",
+        "type": "character",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "status",
+        "type": "text",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "liquidity_tier",
+        "type": "integer",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "valid_from",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      },
+      {
+        "name": "valid_to",
+        "type": "date",
+        "nullable": "YES",
+        "default": null
+      }
+    ]
+  }
+}

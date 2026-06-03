@@ -489,6 +489,12 @@ at `tests/test_identity_substrate_audit_documented.py` pins the
 load-bearing baseline so a future "tidy" pass cannot silently lose
 the numbers.
 
+**Empirical receipts**: per-step JSON outputs and the asyncpg query
+scripts that produced them are tracked at `docs/audits/data/2026-06-03/`
+(see the README there for the file map). Re-running any `stepN_*.py`
+against the live DB produces a fresh JSON; differences from the
+captured 2026-06-03 baselines indicate state drift.
+
 ### Headline findings
 
 - The system's schema is structurally capable of the SCD-2
