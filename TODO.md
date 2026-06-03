@@ -8,6 +8,8 @@ or `docs/MASTER_PLAN.md §9 Build Order`.
 
 Docs-only audit landed at `docs/audits/2026-06-03-claude-code-workflow-controls.md`. Sentinel: `tests/test_claude_code_workflow_controls_audit_documented.py`. **No implementation included in the audit PR.** The audit is the alignment + design pass; the controls below are deferred for operator decision before any of them go live.
 
+**Update 2026-06-03 PM — paid Claude review workflow retired.** Operator directive: "Turn it off entirely. The subagent profiles + your manual gate already cover the discipline. The workflow becomes dead weight you pay for." `.github/workflows/claude-review-heavy-lane.yml` + its dedicated sentinel `tests/test_claude_review_workflow_present.py` deleted; all rule, doc, manifest-checker, PR-template, path-registry, and pre-commit references updated. New sentinel `tests/test_claude_surface_contract.py::test_paid_claude_review_workflow_absent` reds CI if the workflow ever reappears. **Audit §13 items #7 (`--max-turns`), #8 (docs-only `paths-ignore`), and #9 (rerun policy) are now MOOT** — they were credit-spend controls for a workflow that no longer exists.
+
 **Authority order (per audit task spec):** Anthropic Claude Code docs → Anthropic Claude Code GitHub Actions docs → Anthropic public repos (`claude-code-action` source, `examples/`, `docs/security.md`) → this repo's `.claude/**` + `CLAUDE.md` + workflow files → STE lived practice only after the above.
 
 **Failure case study (control-design evidence only):** 2026-06-02 identity-substrate audit (`docs/audits/2026-06-03-identity-substrate-data-flow.md`). The data findings are out of scope here — they are a *failure of process discipline*, used to design the controls.

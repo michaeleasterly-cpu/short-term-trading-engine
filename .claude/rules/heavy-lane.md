@@ -56,19 +56,8 @@ Triggers (mirrors `.claude/path_registry.yaml` `groups.heavy_lane`; per-path `wh
 
 Default and fast lanes are explicitly NOT permitted for these paths.
 
-## Automated first-pass reviewer (advisory)
+## Review discipline (operator + subagent profiles)
 
-When a PR touches any of these paths, the workflow
-`.github/workflows/claude-review-heavy-lane.yml` (Anthropic
-``claude-code-action`` v1) posts a first-pass review comment with a
-verdict of `PASS` / `REQUEST_CHANGES` / `NEEDS_OPERATOR_REVIEW`. This
-is **advisory / review-only** — the workflow has `contents: read` and
-`pull-requests: write` permissions ONLY, never `contents: write`. It
-cannot commit, push, auto-fix, or auto-merge.
+The heavy-lane split-review uses the `spec-reviewer` and `code-quality-reviewer` subagent profiles (see `.claude/agents/`). Operator remains the final gate.
 
-The operator remains the final gate. A `VERDICT: PASS` is necessary
-but not sufficient for merge; the §1 pipeline above (spec → plan →
-subagent execution → split-review → operator authorization) is
-unchanged.
-
-The workflow's `paths:` filter equals exactly `groups.heavy_lane ∪ groups.claude_system` from `.claude/path_registry.yaml`; drift in either direction reds CI via `scripts/check_manifests.py` and the sentinel tests.
+The previously deployed `.github/workflows/claude-review-heavy-lane.yml` (Anthropic `claude-code-action` v1) was retired 2026-06-03. The subagent profiles cover the same review surface without the per-PR API spend; sentinel `tests/test_claude_surface_contract.py::test_paid_claude_review_workflow_absent` reds CI if the workflow returns silently.

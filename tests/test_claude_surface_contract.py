@@ -2,10 +2,17 @@
 
 Pins the load-bearing behavior of ``.claude/settings.json``, the
 hooks under ``.claude/hooks/``, the agents under ``.claude/agents/``,
-the skills under ``.claude/skills/``, and the heavy-lane Claude review
-workflow at ``.github/workflows/claude-review-heavy-lane.yml``. The
-goal is defense-in-depth against silent weakening of review-only
-behavior, hook enforcement, agent boundaries, or skill scope.
+and the skills under ``.claude/skills/``. The goal is defense-in-depth
+against silent weakening of hook enforcement, agent boundaries, or
+skill scope.
+
+The heavy-lane Claude review workflow was removed 2026-06-03 (operator
+directive: "turn it off entirely. The subagent profiles + your manual
+gate already cover the discipline. The workflow becomes dead weight
+you pay for.") — review is now: static checks (Layer 1, gitleaks +
+manifest linter + sentinels) → operator gate (Layer 2). The
+spec-reviewer + code-quality-reviewer subagent profiles cover what the
+paid action did, without the API spend.
 
 Coverage is intentionally conservative — substring presence + smart
 negation-aware scans, not semantic NLP. Comments and YAML
@@ -30,9 +37,6 @@ _SETTINGS = _CLAUDE / "settings.json"
 _HOOKS_DIR = _CLAUDE / "hooks"
 _AGENTS_DIR = _CLAUDE / "agents"
 _SKILLS_DIR = _CLAUDE / "skills"
-_WORKFLOW = (
-    _REPO / ".github" / "workflows" / "claude-review-heavy-lane.yml"
-)
 
 # ─────────────────────────────────────────────────────────────────────
 # Forbidden-command catalogue. Patterns are regexes intended to match
@@ -60,30 +64,6 @@ _AGENT_SKILL_FORBIDDEN_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\bauto[- ]?rebase\b", "auto-rebase"),
     (r"\bgit\s+push\s+[^\n]*(--force|-f\s)", "git push --force"),
     (r"/memory_stores/[^\s]+/memories", "memstore API mutation"),
-)
-
-# Workflow allowedTools — these tool patterns mutate state and must
-# NOT be permitted to the Claude *review* action. Docker / Railway
-# entries stay forbidden here specifically because the review action
-# is review-only by design — deployment is operator-side, not done
-# from inside the review workflow.
-_WORKFLOW_FORBIDDEN_ALLOWED_TOOLS: tuple[str, ...] = (
-    "Bash(gh pr merge",
-    "Bash(git push",
-    "Bash(git commit",
-    "Bash(git rebase",
-    "Bash(git reset",
-    "Bash(docker",
-    "Bash(railway",
-    "Bash(gh api --method PATCH",
-    "Bash(gh api --method POST",
-    "Bash(gh api --method PUT",
-    "Bash(gh api --method DELETE",
-    "Bash(rm ",
-    "Edit",
-    "Write",
-    "MultiEdit",
-    "NotebookEdit",
 )
 
 _NEGATION_WINDOW = 80
@@ -388,53 +368,19 @@ def test_skills_do_not_permit_auto_merge_or_unapproved_memory_writes() -> None:
     )
 
 
-def test_claude_review_workflow_permissions_stay_read_only() -> None:
-    """The heavy-lane Claude review workflow must declare
-    ``contents: read`` (not ``contents: write``) and must use a
-    pinned major-version tag for the third-party action. A change
-    here would silently grant the review surface commit privileges
-    or destabilize the action behavior."""
-    assert _WORKFLOW.is_file(), f"missing workflow: {_WORKFLOW.relative_to(_REPO)}"
-    src = _WORKFLOW.read_text(encoding="utf-8")
-    assert "contents: read" in src, (
-        "workflow must declare `contents: read`"
+def test_paid_claude_review_workflow_absent() -> None:
+    """The heavy-lane paid Claude review workflow was removed
+    2026-06-03. This sentinel asserts it stays gone — re-adding it
+    requires a deliberate operator-approved PR (see
+    ``docs/audits/2026-06-03-claude-code-workflow-controls.md`` §12).
+    """
+    workflow = (
+        _REPO / ".github" / "workflows" / "claude-review-heavy-lane.yml"
     )
-    assert "contents: write" not in src, (
-        "workflow must NOT declare `contents: write` — review-only "
-        "invariant"
-    )
-    assert "anthropics/claude-code-action" in src, (
-        "workflow must use anthropics/claude-code-action"
-    )
-    assert "anthropics/claude-code-action@main" not in src, (
-        "anthropics/claude-code-action MUST NOT be pinned to @main "
-        "(would silently shift behavior)"
-    )
-
-
-def test_claude_review_allowed_tools_do_not_include_mutating_commands() -> None:
-    """The ``--allowedTools`` argument passed to the Claude action
-    must enumerate only read / comment tools. Any mutating Bash
-    invocation, Edit/Write/MultiEdit, gh api mutation, or
-    docker/railway invocation is a contract violation."""
-    src = _WORKFLOW.read_text(encoding="utf-8")
-    # Pull just the --allowedTools line(s).
-    allowed_lines = [
-        line for line in src.splitlines() if "--allowedTools" in line
-    ]
-    assert allowed_lines, (
-        "workflow must declare `--allowedTools` so the review surface "
-        "is bounded; absence means the action's default tool set "
-        "applies"
-    )
-    failures: list[str] = []
-    for line in allowed_lines:
-        for forbidden in _WORKFLOW_FORBIDDEN_ALLOWED_TOOLS:
-            if forbidden in line:
-                failures.append(
-                    f"allowedTools contains forbidden entry: {forbidden!r}"
-                )
-    assert not failures, (
-        "Workflow `--allowedTools` authorizes forbidden tools:\n  "
-        + "\n  ".join(failures)
+    assert not workflow.exists(), (
+        f"{workflow.relative_to(_REPO)} reappeared. The paid heavy-lane "
+        "Claude review was retired 2026-06-03 (operator: 'Turn it off "
+        "entirely. The subagent profiles + your manual gate already "
+        "cover the discipline.'). If you intend to bring it back, do so "
+        "in a deliberate PR that also removes this sentinel."
     )

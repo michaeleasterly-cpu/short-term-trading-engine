@@ -1,9 +1,9 @@
 """Sentinel for the canonical path registry at ``.claude/path_registry.yaml``.
 
 H0 path hardening (2026-06-01) — single source of truth for the path
-lists previously duplicated across the Claude review workflow filter,
-the heavy-lane rule frontmatter/body, ``docs/DEV_PIPELINE_STANDARD.md``
-§0, ``.github/pull_request_template.md``, and
+lists previously duplicated across the heavy-lane rule frontmatter/body,
+``docs/DEV_PIPELINE_STANDARD.md`` §0,
+``.github/pull_request_template.md``, and
 ``.claude/hooks/session-start.sh``.
 
 This sentinel pins:
@@ -14,15 +14,14 @@ This sentinel pins:
   * every path entry has a non-empty ``path`` and a non-empty ``why``
   * no duplicate paths within a group
   * groups are disjoint
-  * workflow filter equals ``heavy_lane ∪ claude_system`` exactly
   * heavy-lane rule frontmatter equals ``heavy_lane`` exactly
   * DEV_PIPELINE_STANDARD, PR template, and session-start hook each
     contain every heavy_lane path string verbatim
 
-Mirrors the precedent of ``tests/test_claude_review_workflow_present.py``:
-presence + load-bearing properties, NOT behavior. The behavior test
-is the end-to-end ``scripts/check_manifests.py`` invocation (covered
-by ``tests/test_manifest_check_present.py``).
+The paid heavy-lane Claude review workflow that previously consumed
+``heavy_lane ∪ claude_system`` as its ``paths:`` filter was retired
+2026-06-03 — the registry's ``claude_system`` group is now consumed
+only by the path-scoped rules and docs, not by a paid action.
 """
 from __future__ import annotations
 
@@ -126,19 +125,6 @@ def test_no_duplicate_paths_across_groups() -> None:
     overlap = heavy & claude
     assert not overlap, (
         f"paths in BOTH heavy_lane and claude_system: {sorted(overlap)}"
-    )
-
-
-def test_workflow_filter_equals_registry_union() -> None:
-    """``.github/workflows/claude-review-heavy-lane.yml`` ``paths:``
-    filter must equal exactly ``heavy_lane ∪ claude_system``. No
-    missing entries (drift toward under-review), no extras (drift
-    toward over-review or stale entries)."""
-    mod = _load_check_manifests_module()
-    failures = mod.check_workflow_filter_equals_registry_union()
-    assert not failures, (
-        "workflow filter drift from registry:\n  "
-        + "\n  ".join(failures)
     )
 
 
