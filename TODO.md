@@ -4,6 +4,48 @@ Cross-cutting personal action items that don't fit existing docs. Operational
 build queues belong in `docs/DATABASE_AND_DATAFLOW.md §5 Implementation Queue`
 or `docs/MASTER_PLAN.md §9 Build Order`.
 
+## ⚑ Claude Code workflow controls — alignment + failure-prevention audit (2026-06-03)
+
+Docs-only audit landed at `docs/audits/2026-06-03-claude-code-workflow-controls.md`. Sentinel: `tests/test_claude_code_workflow_controls_audit_documented.py`. **No implementation included in the audit PR.** The audit is the alignment + design pass; the controls below are deferred for operator decision before any of them go live.
+
+**Authority order (per audit task spec):** Anthropic Claude Code docs → Anthropic Claude Code GitHub Actions docs → Anthropic public repos (`claude-code-action` source, `examples/`, `docs/security.md`) → this repo's `.claude/**` + `CLAUDE.md` + workflow files → STE lived practice only after the above.
+
+**Failure case study (control-design evidence only):** 2026-06-02 identity-substrate audit (`docs/audits/2026-06-03-identity-substrate-data-flow.md`). The data findings are out of scope here — they are a *failure of process discipline*, used to design the controls.
+
+### Verified findings (load-bearing)
+
+- STE's Claude harness is **structurally aligned** with Anthropic's documented mechanisms: slim `CLAUDE.md` + path-scoped `.claude/rules/<x>.md`, `.claude/skills/<x>/SKILL.md`, `.claude/agents/<x>.md`, `.claude/hooks/*.sh` wired via `.claude/settings.json`, `claude-code-action@v1` review with `paths:` filter and `--allowedTools`, `worktree.bgIsolation: worktree` subagent pattern — every surface STE uses is a documented Anthropic mechanism used in a documented way.
+- The path-registry SoT (`.claude/path_registry.yaml` + `scripts/check_manifests.py`) is an STE original sitting on top of canonical mechanisms.
+- The 2026-06-02 failure was **not** caused by misuse of any Claude Code mechanism. It was caused by the **absence of a discovery-first enforcement layer**: existing rules describe *what is correct in each path*, not *what must be traced before fixing in that path*.
+
+### Operator decisions required (before any control becomes live — §13 of the audit)
+
+1. **SWV gate scope** — which paths get the System-Wide Verification rule's `paths:` frontmatter. Audit recommends `tpcore/quality/validation/**`, `tpcore/ingestion/**`, `tpcore/auditheal/**`, `tpcore/selfheal/**`, `platform/migrations/**`, `scripts/ops.py`.
+2. **CIC gate auto-load** — is the Change-Impact Classification skill purely model-invocable, or also paired with a path-scoped rule that auto-loads it as context?
+3. **`UserPromptSubmit` advisory hook** — add it (single advisory line on fix/patch/repair/backfill verbs against SWV-scoped diff) or skip it (rule + skill only)?
+4. **Subagent branch base** — switch implementer agents to `worktree.baseRef: fresh`? Add a CI merge-base sentinel? Both? (Audit recommends both.)
+5. **`permissions.deny` block** — add a `permissions.deny` to `.claude/settings.json` (e.g. `Read(./.env*)`, `Bash(rm -rf /*)`, `Bash(curl *)`)?
+6. **`permissions.defaultMode`** — set explicitly (`default`, `plan`, `acceptEdits`, `dontAsk`) or leave unset?
+7. **Heavy-lane review `--max-turns`** — audit recommends `6` for a verdict-comment-only review.
+8. **Docs-only PR carve-out** — approve `paths-ignore` criteria for the heavy-lane Claude review.
+9. **Claude-review rerun policy** — operator authors the policy text for `docs/DEV_PIPELINE_STANDARD.md` (no technically-enforceable layer without a meta-workflow).
+10. **Identity-path gate wording** — approve rule text: "any prices / fundamentals / lifecycle work must prove `ticker + date → classification_id → CIK` path; engine readers must pass `as_of`; SEC-first for U.S. CIK-backed issuers."
+11. **"No new platform table without schema rationale" wording** — approve text appended to `.claude/rules/migrations.md`.
+
+### Anthropic public reference repos — audit alignment
+
+The audit's authority-order check used `anthropics/claude-code-action` (root, `examples/`, `docs/security.md`) and verified that STE's `.github/workflows/claude-review-heavy-lane.yml` aligns with `examples/pr-review-filtered-paths.yml`. **Open audit deliverable** (deferred): a follow-up doc enumerating (a) where STE's `.claude/` aligns with the action's published examples, (b) where it diverges intentionally, (c) any other canonical surface (e.g., `anthropics/claude-code` open-source CLI patterns, published skills/agents/hooks in the cookbook/marketplace) worth pulling in. Out of scope here: implementation.
+
+### Moratoria (carry forward from 2026-06-02 audit; reinforced here)
+
+- No new platform tables without operator-approved schema rationale.
+- No validator patches before identity-substrate repair.
+- No `confirmed_data_gap_evidence_populator` runs until polluted evidence is reset and identity substrate is repaired.
+- No broad fundamentals / prices backfill until `ticker_history` / `classification_id` attribution repair is planned.
+- No cleanup / quarantine / delete until repair order is approved.
+- No schema consolidation migrations until the dependency graph and repair plan are approved.
+- **NEW (this audit):** no new `.claude/rules/`, `.claude/skills/`, `.claude/agents/`, `.claude/hooks/`, or `.github/workflows/` files implementing the SWV gate, CIC gate, or any §13 control until the operator decisions above are recorded.
+
 ## ⚑ Evidence-based fundamentals/lifecycle arc (2026-05-30 → 2026-05-31)
 
 Five-commit refactor closing the "no validator suppression, no
