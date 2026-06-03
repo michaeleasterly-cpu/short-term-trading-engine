@@ -35,6 +35,12 @@ _HOOKS = (
     # and the cost has not been measured. Re-evaluate after Layer 1
     # adoption demonstrates value.
     "security_pattern_scan.sh",
+    # 2026-06-04 — controls-audit §13 #3: UserPromptSubmit advisory
+    # for the SWV gate. Fires when the prompt contains a fix/patch/
+    # repair/backfill/cleanup verb AND the working diff touches a
+    # discovery-first-scoped path. Exit 0 always (advisory; never
+    # blocks). Kill switch: STE_SWV_ADVISORY_DISABLE=1.
+    "swv-advisory.sh",
 )
 
 
