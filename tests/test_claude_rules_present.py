@@ -38,6 +38,12 @@ _RULES = (
     # identity-substrate failure happened (validators, ingestion,
     # auditheal, selfheal, migrations, scripts/ops.py).
     "discovery-first",
+    # 2026-06-04 — controls-audit §13 #10: identity-path rule encodes
+    # the ticker + date → classification_id → CIK chain discipline +
+    # engine readers-must-pass-as_of invariant + SEC-first authority
+    # for U.S. CIK-backed issuers (FMP fallback only; never overrides
+    # SEC identity).
+    "identity-path",
 )
 
 
