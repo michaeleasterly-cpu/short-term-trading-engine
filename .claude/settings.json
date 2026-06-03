@@ -6,8 +6,10 @@
     "baseRef": "fresh",
     "bgIsolation": "worktree"
   },
-  "$comment_permissions": "permissions.deny (2026-06-04, controls-audit #5) — Anthropic-canonical second layer of defense, enforced by Claude Code itself (not by hooks; hooks can be bypassed with env-var overrides — deny rules cannot). Per https://code.claude.com/docs/en/permissions: rules evaluate deny → ask → allow, first match wins, scoped denies leave the tool available but block matching calls. Three classes: (1) secret files in this project tree + credential dirs in $HOME (.env*, secrets/**, ~/.ssh/**, ~/.aws/**, ~/.gnupg/**, ~/.netrc, ~/.config/gh/**) — Claude can still RUN gh + git because subprocesses read their own configs; the deny only blocks Claude's Read tool. (2) Network calls Claude shouldn't make directly — STE uses Python httpx/requests for HTTP; curl/wget have zero legit usage in tpcore/ops/scripts (verified 2026-06-04) and are a common prompt-injection exfil vector. (3) Destructive ops that should NEVER happen from a Claude session: root/home rm -rf, dd if=, chmod -R 777, chown -R. Sentinel: tests/test_permissions_deny_present.py.",
+  "$comment_permissions": "deny list (controls-audit #5) — hooks can be bypassed, deny rules cannot. Sentinel: tests/test_permissions_deny_present.py.",
   "permissions": {
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable",
     "deny": [
       "Read(./.env)",
       "Read(./.env.*)",
