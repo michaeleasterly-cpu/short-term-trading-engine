@@ -39,6 +39,29 @@ def test_upsert_sql_has_source_priority_where_clause() -> None:
 # ─────────────────────────────────────────────────────────────────────
 
 
+# Test DB URLs that show up in other tests' fixtures (some use
+# monkeypatch.setenv, some use raw os.environ in try/finally) and
+# would falsely make this DB-gated test attempt a connect-and-fail
+# during a whole-suite run. None of these point at a real database;
+# treat as "no DB" and skip. Hardcoded substring list is intentional —
+# the canonical fix would be a session-scope DATABASE_URL guard
+# fixture, but a substring check is one line and doesn't conflict
+# with any of the leakers' legitimate use of the env var.
+_TEST_DB_URL_MARKERS = (
+    "localhost/test",
+    "127.0.0.1/test",
+    "://fake/",
+    "://stub",
+)
+
+
+def _is_test_placeholder_url(url: str) -> bool:
+    if not url:
+        return True
+    lo = url.lower()
+    return any(marker in lo for marker in _TEST_DB_URL_MARKERS)
+
+
 @pytest.mark.parametrize(
     "lower,higher",
     [
@@ -59,17 +82,33 @@ def test_source_priority_ordering(lower: str, higher: str) -> None:
     Marked DB-gated so CI without a live DB doesn't false-fail; the
     invariant is operator memory ``feedback_no_alpaca_for_daily_
     prices_backfill`` (FMP primary > Tradier secondary > NEVER
-    Alpaca for new writes) + migration ``20260525_1200``."""
+    Alpaca for new writes) + migration ``20260525_1200``.
+
+    Whole-suite hardening (2026-06-04): other tests in the suite set
+    DATABASE_URL to placeholder URLs (``postgresql://localhost/test``,
+    ``postgres://fake/db``, ``postgresql://stub``) via either
+    ``monkeypatch.setenv`` or raw ``os.environ``. monkeypatch's
+    auto-cleanup runs at function-scope teardown, but the order in
+    which pytest executes tests can interleave such that this test
+    observes a placeholder URL mid-flight. Defend by detecting
+    placeholder URLs AND by treating an unreachable host as
+    skip-not-fail."""
     import asyncio
     import os
     pytest.importorskip("asyncpg")
     import asyncpg
     db_url = os.getenv("DATABASE_URL_IPV4") or os.getenv("DATABASE_URL")
-    if not db_url:
-        pytest.skip("no DATABASE_URL — provenance ordering test is DB-gated")
+    if _is_test_placeholder_url(db_url):
+        pytest.skip("no real DATABASE_URL — provenance ordering test is DB-gated")
 
     async def _check():
-        conn = await asyncpg.connect(db_url)
+        try:
+            conn = await asyncpg.connect(db_url, timeout=2.0)
+        except (OSError, asyncpg.exceptions.PostgresConnectionError) as exc:
+            pytest.skip(
+                f"DATABASE_URL set but unreachable ({type(exc).__name__}); "
+                "treating as DB-gated skip rather than false-failure"
+            )
         try:
             r_lower = await conn.fetchval(
                 "SELECT platform._source_priority($1)", lower,
@@ -88,17 +127,26 @@ def test_source_priority_ordering(lower: str, higher: str) -> None:
 def test_source_priority_same_source_is_equal() -> None:
     """A fresh fmp pull over an existing fmp row IS allowed (same
     priority = equal, not less-than). This is the legitimate refresh
-    case the WHERE >= clause permits."""
+    case the WHERE >= clause permits.
+
+    Same whole-suite hardening as ``test_source_priority_ordering`` —
+    placeholder URLs + unreachable hosts skip instead of fail."""
     import asyncio
     import os
     pytest.importorskip("asyncpg")
     import asyncpg
     db_url = os.getenv("DATABASE_URL_IPV4") or os.getenv("DATABASE_URL")
-    if not db_url:
-        pytest.skip("no DATABASE_URL — same-priority test is DB-gated")
+    if _is_test_placeholder_url(db_url):
+        pytest.skip("no real DATABASE_URL — same-priority test is DB-gated")
 
     async def _check():
-        conn = await asyncpg.connect(db_url)
+        try:
+            conn = await asyncpg.connect(db_url, timeout=2.0)
+        except (OSError, asyncpg.exceptions.PostgresConnectionError) as exc:
+            pytest.skip(
+                f"DATABASE_URL set but unreachable ({type(exc).__name__}); "
+                "treating as DB-gated skip rather than false-failure"
+            )
         try:
             return int(await conn.fetchval(
                 "SELECT platform._source_priority('fmp')"
