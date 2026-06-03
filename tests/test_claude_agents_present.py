@@ -22,6 +22,15 @@ _AGENTS = (
     "engine-implementer",
     "adapter-implementer",
     "lab-target-runner",
+    # db-architect was previously on disk but missing from this
+    # vocabulary list — pinned 2026-06-04.
+    "db-architect",
+    # 2026-06-04 — vendored from anthropics/claude-code
+    # plugins/pr-review-toolkit per vendor-vs-hand-rolled audit §3 + §9 #2.
+    # Adapted to STE silent-skip vocabulary (HealSpec / FilterDiagnostics /
+    # DATA_OPERATIONS_COMPLETE / daemons swallow-and-exit-0 / PR #319
+    # silent_skip flag discipline / identity-substrate read-side bypass).
+    "silent-failure-hunter",
 )
 
 
