@@ -2,6 +2,9 @@
 
 This file is the **slim** project memory. It carries (a) project identity, (b) one-line architecture, (c) hard universal invariants that hold EVERY session regardless of path, and (d) pointers to the canonical SoT for everything else. Path-scoped rules, invocable workflows, named subagent profiles, and enforcement hooks live in `.claude/`. Per the Anthropic memory guidance (<https://code.claude.com/docs/en/memory>): keep CLAUDE.md short; load detail on demand.
 
+## Session-start trigger
+If the operator's first message is `open session` (case-insensitive), execute the protocol at `memstore_01P5DiJJgau4NhMMekaZDQEN:/agent-context/open-session-protocol.md` — 6 steps, one bash batch per step, report back in the prescribed shape, NO substantive work before the report.
+
 ## Project Identity
 Multi-engine automated trading platform. US equities, daily timeframe, fully automated execution via Alpaca API. Personal-use only.
 
