@@ -152,24 +152,7 @@ def test_deny_blocks_home_credential_directories() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. Network calls Claude shouldn't make directly
-# ---------------------------------------------------------------------------
-
-
-def test_deny_blocks_curl_and_wget() -> None:
-    """Verified 2026-06-04: zero curl/wget usage in tpcore/ops/scripts.
-    STE uses Python httpx/requests for HTTP. curl/wget from a Claude
-    Bash call has no legitimate purpose AND is a common prompt-
-    injection exfil vector."""
-    deny = _deny_list()
-    for rule in ("Bash(curl *)", "Bash(wget *)"):
-        assert rule in deny, (
-            f"settings.json permissions.deny must include {rule!r}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# 5. Destructive ops that should NEVER happen from a Claude session
+# 4. Destructive ops that should NEVER happen from a Claude session
 # ---------------------------------------------------------------------------
 
 

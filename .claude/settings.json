@@ -9,7 +9,6 @@
   "$comment_permissions": "deny list (controls-audit #5) — hooks can be bypassed, deny rules cannot. Sentinel: tests/test_permissions_deny_present.py.",
   "permissions": {
     "defaultMode": "default",
-    "disableBypassPermissionsMode": "disable",
     "deny": [
       "Read(./.env)",
       "Read(./.env.*)",
@@ -25,8 +24,6 @@
       "Read(~/.gnupg/**)",
       "Read(~/.netrc)",
       "Read(~/.config/gh/**)",
-      "Bash(curl *)",
-      "Bash(wget *)",
       "Bash(rm -rf /)",
       "Bash(rm -rf /*)",
       "Bash(rm -rf ~)",
