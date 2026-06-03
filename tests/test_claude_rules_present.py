@@ -33,6 +33,11 @@ _RULES = (
     # triage stack (operator directive "we aren't going to use the llm
     # triage... take it out").
     "security-guidance",  # C0.4 — auto-loads on security-sensitive paths.
+    # 2026-06-04 — controls-audit §13 #1 + #2: discovery-first rule
+    # auto-loads SWV + CIC gates on the paths where the 2026-06-02
+    # identity-substrate failure happened (validators, ingestion,
+    # auditheal, selfheal, migrations, scripts/ops.py).
+    "discovery-first",
 )
 
 

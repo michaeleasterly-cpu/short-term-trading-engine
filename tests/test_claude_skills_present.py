@@ -43,6 +43,12 @@ _SKILLS = (
     ("commit", False),
     ("commit-push-pr", False),
     ("clean-gone", False),
+    # 2026-06-04 — controls-audit §13 #1 + #2: SWV + CIC gates.
+    # Both are model-invocable so Claude auto-runs them when the user
+    # asks for a fix/patch/repair/backfill on a discovery-first-scoped
+    # path. The discovery-first rule references both skills.
+    ("system-wide-verification", True),
+    ("change-impact-classification", True),
 )
 
 
