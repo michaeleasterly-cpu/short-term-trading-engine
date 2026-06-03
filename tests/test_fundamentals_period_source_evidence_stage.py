@@ -578,5 +578,223 @@ async def test_confirmed_data_gap_populator_dry_run_writes_zero_evidence_rows(
     )
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Tests 11-14 — SEC handler return-shape dispatch (live-mode crash fix)
+# ──────────────────────────────────────────────────────────────────────
+#
+# Per the 2026-06-03 operator bounded-live-run crash:
+#
+#   event='ingestion.handler.sec_fundamentals_fallback.done' rows=50
+#                                                            evidence_rows=259
+#   event='ops.stage.failed' error="'int' object has no attribute 'keys'"
+#
+# The SEC handler ``handle_sec_fundamentals_fallback`` is documented as
+# returning ``int | dict[str, Any] | None`` (handlers.py:289):
+#
+#   * dry-run mode    → dict   (planned counters)
+#   * live + rows>0   → int    (rows_written from cache.upsert_payload)
+#   * live + rows==0  → int 0  (no archive_rows)
+#   * outage-trap     → dict   (populator sets ``{"error": ...}``)
+#
+# The populator's post-SEC aggregator used ``(sec_result or {}).keys()``
+# which crashes when ``sec_result`` is a non-zero int (e.g., 259). The
+# fix is an ``isinstance(sec_result, dict)`` dispatch on the 3 shapes;
+# the substrate-driven sec_outcomes read-back at step 2d already covers
+# per-ticker counter aggregation regardless of return-shape, so no
+# downstream logic depends on the handler return being a dict.
+
+
+async def test_populator_handles_sec_dryrun_dict_result(tmp_path) -> None:
+    """SEC handler returns dict (dry-run mode). The populator's
+    aggregator must accept the dict shape and complete cleanly."""
+    from scripts import ops
+    today = datetime.now(UTC).date()
+    pool = _make_pool(filing_rows=_two_quarterly_filings("AAA", today))
+
+    async def _fake_backfill(cache, db_log, symbol, **kwargs):
+        return 0
+
+    async def _fake_handler(p, cfg):
+        return {
+            "dry_run": True,
+            "archive_rows_planned": 12,
+            "per_ticker_planned": {"AAA": 3},
+            "evidence_rows_planned": 0,
+        }
+
+    fake_adapter = MagicMock()
+    fake_adapter.__aenter__ = AsyncMock(return_value=fake_adapter)
+    fake_adapter.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "tpcore.fmp.FMPFundamentalsAdapter", return_value=fake_adapter,
+    ), patch(
+        "tpcore.fundamentals.cache.FundamentalsCache", MagicMock(),
+    ), patch(
+        "tpcore.logging.db_handler.DBLogHandler", return_value=MagicMock(),
+    ), patch(
+        "tpcore.data.fundamentals_backfill.backfill_one_ticker",
+        side_effect=_fake_backfill,
+    ), patch(
+        "tpcore.ingestion.handlers.handle_sec_fundamentals_fallback",
+        side_effect=_fake_handler,
+    ), patch.object(
+        ops, "Path",
+        lambda p="data": tmp_path / p if p == "data" else Path(p),
+    ):
+        result = await ops._stage_confirmed_data_gap_evidence_populator(
+            pool, {"dry_run": "true"},
+        )
+
+    # Result dict surfaces the dict-shape branch's metadata.
+    assert result["sec_result_shape"] == "dict", (
+        f"dry-run SEC dict must dispatch to 'dict' branch; got {result}"
+    )
+    assert result["sec_rows_written"] == 0, (
+        "dict branch must report sec_rows_written=0 (rows landed via "
+        "the substrate-driven aggregator, not the handler return)"
+    )
+
+
+async def test_populator_handles_sec_live_int_result(tmp_path) -> None:
+    """SEC handler returns int (live mode, rows_written=259).
+
+    Regression-pin for the 2026-06-02 bounded-live-run crash. The
+    populator MUST NOT call ``.keys()`` on the int; it must dispatch
+    to the int branch + complete cleanly. The 259-row evidence write
+    that landed inside the handler before its return is preserved by
+    the substrate-driven sec_outcomes read-back at step 2d."""
+    from scripts import ops
+    today = datetime.now(UTC).date()
+    pool = _make_pool(filing_rows=_two_quarterly_filings("AAA", today))
+
+    async def _fake_backfill(cache, db_log, symbol, **kwargs):
+        return 0
+
+    async def _fake_handler(p, cfg):
+        # Live-mode contract: int rows_written, not a dict.
+        return 259
+
+    fake_adapter = MagicMock()
+    fake_adapter.__aenter__ = AsyncMock(return_value=fake_adapter)
+    fake_adapter.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "tpcore.fmp.FMPFundamentalsAdapter", return_value=fake_adapter,
+    ), patch(
+        "tpcore.fundamentals.cache.FundamentalsCache", MagicMock(),
+    ), patch(
+        "tpcore.logging.db_handler.DBLogHandler", return_value=MagicMock(),
+    ), patch(
+        "tpcore.data.fundamentals_backfill.backfill_one_ticker",
+        side_effect=_fake_backfill,
+    ), patch(
+        "tpcore.ingestion.handlers.handle_sec_fundamentals_fallback",
+        side_effect=_fake_handler,
+    ), patch.object(
+        ops, "Path",
+        lambda p="data": tmp_path / p if p == "data" else Path(p),
+    ):
+        # The critical assertion: this does NOT raise
+        # ``'int' object has no attribute 'keys'``.
+        result = await ops._stage_confirmed_data_gap_evidence_populator(
+            pool, {"dry_run": "false"},
+        )
+
+    assert result["sec_result_shape"] == "int", (
+        f"live-mode int return must dispatch to 'int' branch; got {result}"
+    )
+    assert result["sec_rows_written"] == 259, (
+        f"int branch must surface rows_written=259; got "
+        f"{result.get('sec_rows_written')}"
+    )
+
+
+async def test_populator_handles_sec_none_result(tmp_path) -> None:
+    """SEC handler returns None (defensive shape per the contract).
+    Populator must treat as zero/no-op without crash."""
+    from scripts import ops
+    today = datetime.now(UTC).date()
+    pool = _make_pool(filing_rows=_two_quarterly_filings("AAA", today))
+
+    async def _fake_backfill(cache, db_log, symbol, **kwargs):
+        return 0
+
+    async def _fake_handler(p, cfg):
+        return None
+
+    fake_adapter = MagicMock()
+    fake_adapter.__aenter__ = AsyncMock(return_value=fake_adapter)
+    fake_adapter.__aexit__ = AsyncMock(return_value=None)
+
+    with patch(
+        "tpcore.fmp.FMPFundamentalsAdapter", return_value=fake_adapter,
+    ), patch(
+        "tpcore.fundamentals.cache.FundamentalsCache", MagicMock(),
+    ), patch(
+        "tpcore.logging.db_handler.DBLogHandler", return_value=MagicMock(),
+    ), patch(
+        "tpcore.data.fundamentals_backfill.backfill_one_ticker",
+        side_effect=_fake_backfill,
+    ), patch(
+        "tpcore.ingestion.handlers.handle_sec_fundamentals_fallback",
+        side_effect=_fake_handler,
+    ), patch.object(
+        ops, "Path",
+        lambda p="data": tmp_path / p if p == "data" else Path(p),
+    ):
+        result = await ops._stage_confirmed_data_gap_evidence_populator(
+            pool, {"dry_run": "false"},
+        )
+
+    assert result["sec_result_shape"] == "none", (
+        f"None return must dispatch to 'none' branch; got {result}"
+    )
+    assert result["sec_rows_written"] == 0, (
+        "none branch must report sec_rows_written=0"
+    )
+
+
+def test_live_int_result_does_not_call_keys() -> None:
+    """Source-sentinel: the aggregator block dispatches on
+    ``isinstance(sec_result, dict)`` BEFORE any ``.keys()`` call so a
+    non-zero int return cannot reach the dict-only branch.
+
+    Pins the structural fix shape so the unconditional ``.keys()``
+    pattern cannot regress.
+    """
+    src = _OPS_PATH.read_text(encoding="utf-8")
+    stage_idx = src.find("_stage_confirmed_data_gap_evidence_populator")
+    assert stage_idx >= 0, "stage function not found"
+    body = src[stage_idx:stage_idx + 12000]
+
+    # The pre-fix unconditional pattern must be gone.
+    assert "(sec_result or {}).keys()" not in body, (
+        "the unconditional ``(sec_result or {}).keys()`` pattern is "
+        "the 2026-06-02 crash shape; it must be replaced with an "
+        "``isinstance(sec_result, dict)`` dispatch"
+    )
+
+    # The isinstance dispatch must be present and precede any
+    # ``sec_result.keys()`` call.
+    dispatch_idx = body.find("isinstance(sec_result, dict)")
+    assert dispatch_idx >= 0, (
+        "post-SEC aggregator must dispatch on "
+        "``isinstance(sec_result, dict)`` before calling ``.keys()``"
+    )
+    keys_idx = body.find("sec_result.keys()")
+    assert keys_idx > dispatch_idx, (
+        f"``sec_result.keys()`` must appear AFTER the isinstance "
+        f"dispatch (dispatch_idx={dispatch_idx}, keys_idx={keys_idx})"
+    )
+
+    # The int branch must also be present so live-mode ``int`` returns
+    # land on the no-keys path.
+    assert "isinstance(sec_result, int)" in body, (
+        "post-SEC aggregator must dispatch on ``isinstance(sec_result, "
+        "int)`` for the live-mode rows_written shape"
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
