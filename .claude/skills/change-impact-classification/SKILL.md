@@ -123,6 +123,68 @@ VERDICT: PROCEED | DISCOVERY_REQUIRED | OPERATOR_DECISION_REQUIRED
 
 All 12 questions answered concretely; SWV passed; the chosen layer is named and defended; the boundary is `local` or `shared` with all collateral verified; no policy gate fires.
 
+## Type-design analysis (merged from anthropics/claude-code pr-review-toolkit, vendor-audit §3)
+
+Vendored 2026-06-04 per `docs/audits/2026-06-03-vendor-vs-handrolled.md` §3 + operator decision §9 #3 ("merge with the CIC gate rather than vendor as a standalone agent"). Anthropic ships `type-design-analyzer` as a separate pr-review-toolkit agent; STE folds its analysis here so a single CIC pass covers both classification + type-design — one gate, one report.
+
+### When to run the type-design pass
+
+Run the type-design analysis (in addition to the 12 mandatory questions) when the diff matches **any** of:
+
+- `CHANGE_TYPE` is `shared_abstraction_change` — a new helper class / mixin / abstraction is introduced.
+- `CHANGE_TYPE` is `database_schema_change` — a new table or column is a new row-type with implicit invariants.
+- `CHANGE_TYPE` is `local_code_behavior_change` AND the diff introduces a new `class` / `dataclass` / Pydantic v2 model / Protocol / TypedDict / Enum.
+- The diff modifies an existing type's invariants (frozen=True flip, mutable default added, validator removed, required field made optional).
+
+**Skip** the type-design pass for `documentation_only`, `test_only_change`, `configuration_or_environment_change`, `workflow_control_change`, `github_workflow_change`, `claude_hook_or_agent_change` — those don't carry type invariants in the relevant sense.
+
+### What to evaluate (5 dimensions)
+
+For each new or modified type, evaluate:
+
+1. **Identify invariants.** Data-consistency requirements, valid state transitions, relationships between fields, business-logic rules encoded in the type, preconditions / postconditions. List each one with a one-line description.
+2. **Encapsulation (1–10).** Are internals hidden? Can invariants be violated from outside? Is the interface minimal and complete? STE convention: never expose tpcore-private attrs (`._store`, `._pool`); extend the class with a public accessor (see `docs/STYLE_GUIDE.md`).
+3. **Invariant expression (1–10).** How clearly do the invariants come through the type's structure? STE convention: Pydantic v2 `Field(...)` constraints, `Literal[...]`, `Annotated[...]` for explicit invariants; type hints required everywhere (`from __future__ import annotations`).
+4. **Invariant usefulness (1–10).** Do the invariants prevent real bugs? Aligned with STE's risk model (capital-gate, 100%-green data invariant, paper-only mandate)? Neither too restrictive nor too permissive.
+5. **Invariant enforcement (1–10).** Are invariants checked at construction (`__init__` / Pydantic validator)? All mutation points guarded? Is it impossible to create an invalid instance? STE convention: prefer `frozen=True` Pydantic models for value objects; constructor validation is required, not advisory.
+
+### STE-specific anti-patterns to flag
+
+In addition to Anthropic's catalogue (anemic models, exposed mutable internals, invariants only in docs, too many responsibilities, missing constructor validation, inconsistent enforcement) — flag these STE-specific ones:
+
+- **No `from __future__ import annotations`** at the top of a module that defines new types.
+- **Untyped `Callable`** (`Callable` without parameters/return) — required to be `Callable[[...], ...]` per code-quality-reviewer.
+- **`dict[str, Any]` as a return type** when a Pydantic model would be more specific (one of STE's recurring defect classes).
+- **Missing `tpcore.aar.classify_exit_reason` call** when a new `ExitReason` literal is added — hardcoded literals can't carry the invariant.
+- **A new ticker-bearing class without an `as_of` field** in the constructor — per `.claude/rules/identity-path.md`, the identity chain must be provable.
+- **A new platform-table-row dataclass without `classification_id`** — same identity-path discipline.
+
+### Required output (added to the CIC report when type-design runs)
+
+```text
+## Type-design analysis
+
+For each new / modified type:
+
+### <TypeName>
+
+Invariants identified:
+  - <invariant 1>
+  - <invariant 2>
+
+Ratings:
+  - Encapsulation:        X/10 — <one-line justification>
+  - Invariant expression: X/10 — <one-line justification>
+  - Invariant usefulness: X/10 — <one-line justification>
+  - Invariant enforcement: X/10 — <one-line justification>
+
+Strengths: <what's done well>
+Concerns: <specific issues>
+Recommended improvements: <concrete, pragmatic suggestions — perfect is the enemy of good>
+```
+
+Add this section to the CIC report; the overall CIC verdict (`PROCEED` / `DISCOVERY_REQUIRED` / `OPERATOR_DECISION_REQUIRED`) still applies. A type with average rating < 6/10 across the four dimensions, AND no clear improvement path, should usually return `DISCOVERY_REQUIRED` — the existing type model needs more thought before fixing the symptom.
+
 ## What this skill does NOT do
 
 - Never proposes the actual fix. CIC is classification + justification, not implementation.
@@ -136,5 +198,12 @@ All 12 questions answered concretely; SWV passed; the chosen layer is named and 
 - `.claude/rules/discovery-first.md` — the path-scoped rule that loads this skill.
 - `.claude/skills/system-wide-verification/SKILL.md` — the prerequisite gate.
 - `docs/audits/2026-06-03-claude-code-workflow-controls.md` §9 — the design.
-- `.claude/rules/migrations.md` — for `database_schema_change` classifications: also check the "no new platform table without schema rationale" wording (audit §13 #11, not yet implemented).
+- `docs/audits/2026-06-03-vendor-vs-handrolled.md` §3 — the type-design merge decision (§9 #3).
+- `.claude/rules/migrations.md` — for `database_schema_change` classifications: also check the "no new platform table without schema rationale" wording (audit §13 #11, implemented PR #467).
+- `.claude/rules/identity-path.md` — for any ticker-bearing type / classification_id-bearing schema, the identity-path discipline applies.
 - `.claude/rules/data-adapter.md` — for `ingestion_or_backfill_change` classifications: the 6-stage contract is the existing infrastructure question #10 must check.
+- `docs/STYLE_GUIDE.md` — the type-hint + Pydantic v2 + private-attr conventions the type-design pass enforces.
+
+## Acknowledgement of vendor source
+
+The "Type-design analysis" section above adapts the prompt structure (5-dimension framework, output format, anti-pattern catalogue, key principles) from `anthropics/claude-code` `plugins/pr-review-toolkit/agents/type-design-analyzer.md`. STE-specific anti-patterns and the trigger conditions are STE-original.
