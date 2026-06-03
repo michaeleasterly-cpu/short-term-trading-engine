@@ -37,7 +37,7 @@ Both audits' operator-decision queues together — 18 items total. Order suggest
 - Vendor-audit #7: `commit-commands` vendor.
 - Vendor-audit #2: `silent-failure-hunter` agent (after adapting to STE silent-skip vocabulary).
 - Controls-audit #5: `permissions.deny` block in `.claude/settings.json`.
-- Controls-audit #4: subagent `worktree.baseRef: fresh` + CI merge-base sentinel — *demonstrated live during PR #458 today; the rebase-from-origin/main pattern works but is manual*.
+- ~~Controls-audit #4: subagent `worktree.baseRef: fresh` + CI merge-base sentinel~~ **DONE 2026-06-04** — `.claude/settings.json` flipped to `baseRef: "fresh"`; CI sentinel at `.github/workflows/branch-base-sentinel.yml`; sentinel test at `tests/test_branch_base_sentinel_present.py`; CLAUDE.md updated. The implementer agents (`engine-implementer`, `adapter-implementer`, `db-architect`) already carry `isolation: worktree` so their dispatches branch from origin/main per Anthropic's documented subagent isolation semantics.
 
 **Tier 2 — design before implementation:**
 - Controls-audit #1 + #2: SWV gate + CIC gate paths and auto-load.

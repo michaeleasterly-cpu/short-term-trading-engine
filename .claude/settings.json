@@ -1,8 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "$comment": "Project-scoped Claude Code settings. The version-controlled architecture surface (rules/skills/agents/hooks here, settings.json itself) — per-machine state lives in .claude/settings.local.json (gitignored). Hooks wire the .claude/hooks/*.sh enforcement scripts. Worktree config locks in the parallel-session workflow (.claude/rules/parallel-sessions.md). Authoritative external: https://code.claude.com/docs/en/hooks-guide + https://code.claude.com/docs/en/worktrees.",
+  "$comment": "Project-scoped Claude Code settings. The version-controlled architecture surface (rules/skills/agents/hooks here, settings.json itself) — per-machine state lives in .claude/settings.local.json (gitignored). Hooks wire the .claude/hooks/*.sh enforcement scripts. Worktree config locks in the parallel-session workflow. Authoritative external: https://code.claude.com/docs/en/hooks-guide + https://code.claude.com/docs/en/worktrees + https://code.claude.com/docs/en/sub-agents.",
+  "$comment_baseRef": "worktree.baseRef='fresh' (2026-06-04) — flipped from 'head' per docs/audits/2026-06-03-claude-code-workflow-controls.md §13 #4 + PR #458 incident: an EnterWorktree call inherited the operator's deferred-arc checkout instead of origin/main, producing a worktree branched from stale state. 'fresh' makes every EnterWorktree (and every subagent with `isolation: worktree`) branch from origin/main by default. The CI sentinel `.github/workflows/branch-base-sentinel.yml` is the PR-time backstop. If you ever need to stack a PR on another in-flight branch, override per-call (pass an explicit base ref to `git worktree add -b … <base>`) rather than flipping this default back.",
   "worktree": {
-    "baseRef": "head",
+    "baseRef": "fresh",
     "bgIsolation": "worktree"
   },
   "hooks": {
