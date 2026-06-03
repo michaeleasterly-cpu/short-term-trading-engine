@@ -1140,6 +1140,12 @@ async def _stage_confirmed_data_gap_evidence_populator(
         ticker_filter = None
     limit = int(cfg.get("limit", 0)) or None
     archive_max_age_days = int(cfg.get("archive_max_age_days", 7))
+    # Capture the stage run-start so the live-mode aggregator (int
+    # branch of the SEC handler return) can scope its evidence-row
+    # count via ``attempted_at >= stage_run_start_ts`` — the SEC
+    # handler returns ``int rows_written`` in live mode (not a dict),
+    # so we recover the evidence-row count from the substrate.
+    stage_run_start_ts = datetime.now(UTC)
     log.info(
         "ops.stage.confirmed_data_gap_evidence_populator.start",
         dry_run=dry_run,
@@ -1275,12 +1281,48 @@ async def _stage_confirmed_data_gap_evidence_populator(
                 "ops.stage.confirmed_data_gap_evidence_populator.sec_handler_raised",
                 error=str(exc)[:160],
             )
-        log.info(
-            "ops.stage.confirmed_data_gap_evidence_populator.sec_done",
-            result_keys=sorted(
-                k for k in (sec_result or {}).keys() if isinstance(k, str)
-            ),
-        )
+        # Dispatch on the SEC handler's documented return-shape union
+        # (``int | dict[str, Any] | None`` per handlers.py:289).
+        #
+        # * ``dict``   — dry-run (or RuntimeError-trapped) result;
+        #                surface the result keys for observability.
+        # * ``int``    — live-mode ``rows_written`` from
+        #                ``cache.upsert_payload``. No ``.keys()`` —
+        #                surface the row count directly.
+        # * ``None``   — defensive; treat as zero/no-op.
+        #
+        # Fix for the 2026-06-02 operator bounded-live-run crash:
+        # ``'int' object has no attribute 'keys'`` was raised at this
+        # call site after the SEC handler returned 259 rows-written.
+        # The evidence-row write itself had already committed inside
+        # the handler (line 566-568) — only the populator's downstream
+        # aggregator crashed. The 506-row evidence write that landed
+        # before the crash is preserved (no DB cleanup needed).
+        sec_result_shape: str
+        sec_rows_written = 0
+        if isinstance(sec_result, dict):
+            sec_result_shape = "dict"
+            log.info(
+                "ops.stage.confirmed_data_gap_evidence_populator.sec_done",
+                result_shape=sec_result_shape,
+                result_keys=sorted(
+                    k for k in sec_result.keys() if isinstance(k, str)
+                ),
+            )
+        elif isinstance(sec_result, int):
+            sec_result_shape = "int"
+            sec_rows_written = int(sec_result)
+            log.info(
+                "ops.stage.confirmed_data_gap_evidence_populator.sec_done",
+                result_shape=sec_result_shape,
+                rows_written=sec_rows_written,
+            )
+        else:
+            sec_result_shape = "none"
+            log.info(
+                "ops.stage.confirmed_data_gap_evidence_populator.sec_done",
+                result_shape=sec_result_shape,
+            )
 
         # 2d. Read SEC evidence rows back from the substrate (live)
         #     OR from the handler's per-ticker counters (dry-run) so
@@ -1368,6 +1410,15 @@ async def _stage_confirmed_data_gap_evidence_populator(
             path=manifest_path, rows=len(manifest_records),
         )
 
+    # Surface SEC-handler return-shape + live-mode rows-written in the
+    # result dict for operator visibility. ``sec_result_shape`` is
+    # absent when ``per_ticker_periods`` was empty (no SEC call made).
+    sec_meta: dict[str, Any] = {}
+    if per_ticker_periods:
+        sec_meta = {
+            "sec_result_shape": sec_result_shape,
+            "sec_rows_written": sec_rows_written,
+        }
     result = {
         "dry_run": dry_run,
         "use_bulk_zip": use_bulk_zip,
@@ -1376,6 +1427,8 @@ async def _stage_confirmed_data_gap_evidence_populator(
         "tickers_in_filter": len(ticker_filter or []),
         "limit": limit or 0,
         "manifest_path": manifest_path,
+        "stage_run_start_ts": stage_run_start_ts.isoformat(),
+        **sec_meta,
         **counters,
     }
     log.info(
