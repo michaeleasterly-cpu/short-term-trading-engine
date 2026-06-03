@@ -28,6 +28,13 @@ _HOOKS = (
     "gate-ecr-dfcr-edits.sh",
     "risk-path-reminder.sh",
     "session-start.sh",
+    # 2026-06-04 — vendor-audit §2 + §9 #1: Anthropic plugins/security-
+    # guidance Layer 1 (pattern-rules) vendored. Layer 2 (Stop-hook LLM
+    # diff review) + Layer 3 (agentic commit/push review) intentionally
+    # NOT vendored — they call the Anthropic API per turn / per commit
+    # and the cost has not been measured. Re-evaluate after Layer 1
+    # adoption demonstrates value.
+    "security_pattern_scan.sh",
 )
 
 
