@@ -1,0 +1,90 @@
+name: Branch base sentinel
+
+# PR-time check that the PR's base branch is an ancestor of HEAD —
+# i.e., the PR was authored from an up-to-date base, not a stale one.
+#
+# The wrong-base failure mode this catches: a PR branch was created
+# from an old commit on the base branch; the base has since moved
+# forward; squash-merging the PR would either drop commits from base
+# (if force-merged) or require a merge commit. GitHub's "branch is
+# out of date" check can be bypassed by admin override; this CI gate
+# cannot.
+#
+# Reference:
+#   - docs/audits/2026-06-03-claude-code-workflow-controls.md §11 + §13 #4
+#   - The PR #458 incident (2026-06-03): an EnterWorktree call
+#     inherited the operator's deferred-arc checkout state instead of
+#     origin/main, producing a worktree branched from stale state. The
+#     wrong-base PR was caught and rebased mid-authoring. This
+#     workflow is the durable backstop so the next operator (or the
+#     next session of Claude) doesn't have to catch it manually.
+#
+# Authoritative external:
+#   - https://code.claude.com/docs/en/worktrees
+#   - https://code.claude.com/docs/en/sub-agents
+#   - https://git-scm.com/docs/git-merge-base
+#
+# Sentinel: tests/test_branch_base_sentinel_present.py.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: branch-base-sentinel-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  branch-base:
+    name: PR base is ancestor of HEAD
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    permissions:
+      contents: read
+      pull-requests: read
+
+    steps:
+      - name: Checkout PR head with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Fetch PR base branch
+        run: |
+          git fetch origin "${{ github.event.pull_request.base.ref }}" --depth=50
+
+      - name: Assert PR base is an ancestor of HEAD
+        run: |
+          BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
+          BASE_SHA="$(git rev-parse "$BASE_REF")"
+          HEAD_SHA="$(git rev-parse HEAD)"
+
+          echo "Base ref:  $BASE_REF ($BASE_SHA)"
+          echo "PR head:   $HEAD_SHA"
+          echo ""
+
+          if git merge-base --is-ancestor "$BASE_REF" HEAD; then
+            echo "✓ $BASE_REF is reachable from HEAD; PR is up to date with base."
+            exit 0
+          fi
+
+          echo "✗ $BASE_REF is NOT an ancestor of HEAD."
+          echo ""
+          echo "This PR was authored from an out-of-date base commit. The base"
+          echo "branch (${{ github.event.pull_request.base.ref }}) has moved forward"
+          echo "since this branch was created. Merging would either drop commits"
+          echo "from the base branch or require a merge commit that re-introduces"
+          echo "history the squash-merge flow does not handle cleanly."
+          echo ""
+          echo "Fix locally:"
+          echo "  git fetch origin"
+          echo "  git rebase origin/${{ github.event.pull_request.base.ref }}"
+          echo "  git push --force-with-lease"
+          echo ""
+          echo "Reference: docs/audits/2026-06-03-claude-code-workflow-controls.md §13 #4."
+          echo "If you authored this PR from a subagent worktree, also check that"
+          echo "the worktree was branched from origin/main, not from the parent"
+          echo "session's HEAD (see .claude/settings.json worktree.baseRef)."
+          exit 1
