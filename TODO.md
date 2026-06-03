@@ -467,6 +467,118 @@ gate refuses orders on terminally-delisted tickers.
   (PR #448) unchanged. Evidence-gate sentinel preserved. Retry bounded
   sequence authorized post-merge.
 
+  **PAUSED 2026-06-03** following the identity-substrate audit
+  (`docs/audits/2026-06-03-identity-substrate-data-flow.md`). The
+  bounded-live run on 2026-06-02 wrote 506 evidence rows keyed on
+  FMP's natural `period_end_date` (e.g., `2024-10-20`) rather than the
+  validator's inferred period_end_date (e.g., `2024-10-31`). The
+  validator's dual-source `bool_or` join requires both sources at the
+  same date and never matches → 0 `excluded_confirmed_data_gap`
+  candidates. Substrate is **polluted; reset before reuse**. Per audit
+  repair order, identity attribution is fixed *before* re-running the
+  populator. See §5 of the audit doc.
+
+
+## ⚑ Identity substrate / data-flow audit — 2026-06-03
+
+Read-only audit of identity master, ticker_history, prices_daily,
+fundamentals_quarterly, lifecycle substrate, writer triggers, and
+consumer bypass landed at
+`docs/audits/2026-06-03-identity-substrate-data-flow.md`. Sentinel test
+at `tests/test_identity_substrate_audit_documented.py` pins the
+load-bearing baseline so a future "tidy" pass cannot silently lose
+the numbers.
+
+### Headline findings
+
+- The system's schema is structurally capable of the SCD-2
+  temporal-identity model the operator intended. 15 platform tables
+  carry `BEFORE INSERT` triggers that resolve `classification_id` from
+  `ticker_history` keyed on the row's date column. Write-side
+  attribution architecture is **correct**.
+- 96% of tickers in `ticker_history` have a single open-ended row
+  covering all dates (no predecessor windows captured for the
+  delisted-then-reused cohort).
+- Engine backtest readers call `IdentityDispatcher.ticker_to_classification_id(t)`
+  WITHOUT passing `as_of`, getting current-entity attribution for all
+  historical dates. **Read-side bypass.**
+- **1,296,359 prices_daily bars (6.06%) attributed to entities that
+  didn't exist yet per their assigned classification's FPFD** across
+  1,149 tickers.
+- **92,318 prices_daily bars (266 tickers)** could be re-attributed
+  correctly using existing `ticker_history` windows but weren't
+  (historical rows inserted before predecessor classifications existed
+  in the substrate).
+- **6,017 fundamentals_quarterly rows (775 tickers) pre-FPFD**;
+  1,034 orphan rows (no active classification); 2,153 with NULL
+  `classification_id`; **109 duplicate logical `(ticker, period)`
+  quarters** (surrogate-PK consequence).
+- `lifetime_start = '1900-01-01'` (sentinel) on 100% of active
+  classifications; FPFD coverage is **only 16.6%**;
+  `issuer_securities` essentially empty (89 rows).
+- Live order routing is keyed on ticker string (Alpaca
+  `submit_order(symbol=ticker)`); the contamination affects signal
+  *content* via mis-attributed historical bars, not order *routing*.
+- `DATA_OPERATIONS_COMPLETE` remains blocked by
+  `fundamentals_quarterly_completeness` (111 ticker-FAIL count).
+
+### Table sprawl
+
+49 platform tables today; target footprint ~20. Consolidation candidates:
+- `corporate_actions` + `ticker_lifecycle_events` + `issuer_history`
+  → ONE `corporate_events` with `event_kind` enum extended.
+- `fundamentals_quarterly` + `_archive` + `_quarantine` → ONE table
+  with `status` enum + natural PK `(ticker, period_end_date)`.
+- `issuers` + `issuer_securities` + `ticker_classifications` →
+  `ticker_classifications` carries all entity identifiers inline.
+- `fundamentals_period_source_evidence` + `failed_alpha_ledger` +
+  `parity_drift_log` + `forensics_triggers` → rows in
+  `data_quality_log` with appropriate `kind` field.
+- ~6 empty / speculative tables → DROP candidates.
+
+### Moratoria (effective on audit-doc merge)
+
+1. No new platform tables without explicit operator-approved schema
+   rationale. Default first question: "could this be a column / kind
+   enum on an existing table?"
+2. No validator patches before identity-substrate repair.
+3. No `confirmed_data_gap_evidence_populator` runs until polluted
+   evidence is reset and identity substrate is repaired.
+4. No broad fundamentals or price backfill until ticker_history /
+   classification_id attribution repair is planned.
+5. No cleanup / quarantine / delete until audit repair order is approved.
+6. No schema consolidation migrations until dependency graph and
+   repair plan are approved.
+7. No FMP-primary identity repair for U.S. CIK-backed issuers.
+   SEC/CIK is authoritative; FMP is fallback only.
+
+### Repair order (15 steps)
+
+Identity-first. Validator fixes, backfills, evidence rebuilds all
+come AFTER identity attribution is correct. Full sequence in audit
+doc §5.
+
+1. Publish audit baseline + freeze new table creation (this PR).
+2. Reset polluted `fundamentals_period_source_evidence`.
+3. Re-run SEC-first FPFD extraction against full active universe.
+4. Repair `lifetime_start`.
+5. Backfill predecessor classifications + `ticker_history` windows
+   for delisted-then-reused cohort.
+6. Re-run SCD-2 trigger logic as idempotent UPDATE pass against
+   existing rows (no code change required).
+7. Add NOT VALID FK + VALIDATE on `prices_daily.classification_id`.
+8. Migrate `fundamentals_quarterly` PK to natural key; resolve dups.
+9. Fix engine/backtest readers to pass `as_of=row_date`.
+10. Audit + fix universe construction filters.
+11. Fix `_infer_missing_period_ends` to consume temporal identity.
+12. Fix `confirmed_data_gap_evidence_populator` FMP-leg date-key semantics.
+13. Rebuild evidence substrate via `data_quality_log` (no new sidecar table).
+14. Re-run validation suite.
+15. Re-run `DATA_OPERATIONS_COMPLETE`.
+
+[lane: docs-only] [gate: audit-doc PR merged → repair-plan PR]
+[needs: operator audit-read + repair-plan authorization]
+
 
 ## ✅ FPFD extractor repair (PRs #433–#437) — CLOSED 2026-06-02
 
