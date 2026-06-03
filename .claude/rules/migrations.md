@@ -22,3 +22,34 @@ Discipline:
 Concurrency hazard: a long `daily_bars` backfill from a separate process contends on the Supabase pooler (`connection was closed`). The data-ops mkdir-atomic self-exclusion lock prevents the scheduled-cycle overlap; ad-hoc concurrent `ops.py --stage daily_bars` is NOT guarded.
 
 Every migration goes through the full §1 pipeline (heavy lane).
+
+## No new platform table without schema rationale (2026-06-04, controls-audit §13 #11)
+
+A migration that adds a new `platform.*` table must carry an **operator-approved schema rationale** in its docstring + the PR body that names:
+
+1. **The readers** — every code path that will query the new table (with `file:line` references where they exist; "future readers" is not an answer).
+2. **The writers** — the canonical writer of the table. Single-writer is the default; multi-writer requires explicit justification.
+3. **The existing-table alternative** — what existing `platform.*` table was considered as the home for this data, and why was it rejected? "I didn't check" is a `DISCOVERY_REQUIRED` answer (see `.claude/rules/discovery-first.md` CIC gate question #9 + #10).
+
+The 2026-06-02 identity-substrate audit named the **sidecar / evidence / quarantine** class as the specific failure mode: tables created to track "data we're not sure about" that duplicated logic the existing 15 `BEFORE INSERT` triggers + `ticker_history` SCD-2 substrate already handled. **No new sidecar / evidence / quarantine table without consolidation review** — the consolidation question (does the existing identity substrate already cover this?) must be answered explicitly, not implicitly assumed.
+
+Required rationale-section template (paste into the migration docstring + the PR body):
+
+```text
+## Schema rationale (controls-audit §13 #11)
+
+Readers (named code paths that will query the new table):
+  - <file:line>
+
+Writers (canonical writer; single-writer unless justified):
+  - <file:line>
+
+Existing-table alternative considered:
+  - <table name>: <why this new table is needed despite the existing one>
+
+Why not extend the existing identity / lifecycle substrate?
+  - <one-line evidence — cite ticker_history / ticker_classifications /
+    classification_id triggers / SCD-2 mechanics where relevant>
+```
+
+For `database_schema_change` classifications, the CIC gate's `OPERATOR_DECISION_REQUIRED` verdict auto-fires (see `.claude/rules/discovery-first.md` §9). This rationale is the input the operator needs to authorize.
