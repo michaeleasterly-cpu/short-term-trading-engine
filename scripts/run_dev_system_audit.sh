@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # S2 — read-only dev-system audit wrapper.
 #
-# Runs the Packet Void dev-system audit + manifest-linter against the
+# Runs the Trellis dev-system audit + manifest-linter against the
 # STE working tree in REPORT_ONLY mode. The wrapper is advisory: any
 # drift findings are printed and recorded with their tool exit codes,
 # but the wrapper itself returns 0 so it can be invoked from CI, a
@@ -14,7 +14,7 @@
 #
 # Authoritative cross-reference:
 #   * Adoption plan: docs/superpowers/plans/2026-06-01-ste-round-trip-dev-system-adoption-plan.md
-#   * Dev system:    https://github.com/michaeleasterly-cpu/packetvoid-dev-system
+#   * Dev system:    https://github.com/michaeleasterly-cpu/trellis-dev-system
 #
 # Read-only invariants enforced by tests/test_dev_system_audit_wrapper.py:
 #   * Never invokes bootstrap_project.py (which would render artifacts
@@ -37,10 +37,10 @@ STE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Dev-system location. Operator may override via env var; default is
 # the operator's known sibling checkout.
-PACKETVOID_DEV_SYSTEM_DIR="${PACKETVOID_DEV_SYSTEM_DIR:-/Users/michael/packetvoid-dev-system}"
+TRELLIS_DEV_SYSTEM_DIR="${TRELLIS_DEV_SYSTEM_DIR:-/Users/michael/trellis-dev-system}"
 
-AUDIT_SCRIPT="$PACKETVOID_DEV_SYSTEM_DIR/devsystem/scripts/audit_project.py"
-CHECK_SCRIPT="$PACKETVOID_DEV_SYSTEM_DIR/devsystem/scripts/check_manifests.py"
+AUDIT_SCRIPT="$TRELLIS_DEV_SYSTEM_DIR/devsystem/scripts/audit_project.py"
+CHECK_SCRIPT="$TRELLIS_DEV_SYSTEM_DIR/devsystem/scripts/check_manifests.py"
 
 # Optional Python interpreter override; default to the project venv.
 PY="${PY:-$STE_ROOT/.venv/bin/python3}"
@@ -53,11 +53,11 @@ fi
 # ─────────────────────────────────────────────────────────────────────
 
 if [ ! -f "$AUDIT_SCRIPT" ] || [ ! -f "$CHECK_SCRIPT" ]; then
-  echo "NEEDS_OPERATOR_ACTION: dev-system scripts missing at $PACKETVOID_DEV_SYSTEM_DIR"
+  echo "NEEDS_OPERATOR_ACTION: dev-system scripts missing at $TRELLIS_DEV_SYSTEM_DIR"
   echo "  expected: $AUDIT_SCRIPT"
   echo "  expected: $CHECK_SCRIPT"
-  echo "  Either (a) clone packetvoid-dev-system to the default location,"
-  echo "         (b) set PACKETVOID_DEV_SYSTEM_DIR to its checkout, or"
+  echo "  Either (a) clone trellis-dev-system to the default location,"
+  echo "         (b) set TRELLIS_DEV_SYSTEM_DIR to its checkout, or"
   echo "         (c) skip this wrapper."
   exit 2
 fi
@@ -71,8 +71,8 @@ fi
 # Banner
 # ─────────────────────────────────────────────────────────────────────
 
-echo "── Packet Void dev-system audit ─ REPORT_ONLY ──"
-echo "  dev-system:  $PACKETVOID_DEV_SYSTEM_DIR"
+echo "── Trellis dev-system audit ─ REPORT_ONLY ──"
+echo "  dev-system:  $TRELLIS_DEV_SYSTEM_DIR"
 echo "  target:      $STE_ROOT"
 echo "  python:      $PY"
 echo "  invocation:  read-only — no STE files are written, no API calls"

@@ -191,16 +191,16 @@ def test_wrapper_captures_audit_and_check_exit_codes_safely() -> None:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_wrapper_supports_packetvoid_dev_system_dir_override() -> None:
+def test_wrapper_supports_trellis_dev_system_dir_override() -> None:
     text = _wrapper_text()
-    assert "PACKETVOID_DEV_SYSTEM_DIR" in text, (
-        "wrapper must honor PACKETVOID_DEV_SYSTEM_DIR env var "
+    assert "TRELLIS_DEV_SYSTEM_DIR" in text, (
+        "wrapper must honor TRELLIS_DEV_SYSTEM_DIR env var "
         "(operator-overridable dev-system location)"
     )
     # And it should default sensibly if unset.
-    assert re.search(r"PACKETVOID_DEV_SYSTEM_DIR:-", text), (
-        "wrapper must provide a default when PACKETVOID_DEV_SYSTEM_DIR "
-        "is unset (``${PACKETVOID_DEV_SYSTEM_DIR:-<default>}``)"
+    assert re.search(r"TRELLIS_DEV_SYSTEM_DIR:-", text), (
+        "wrapper must provide a default when TRELLIS_DEV_SYSTEM_DIR "
+        "is unset (``${TRELLIS_DEV_SYSTEM_DIR:-<default>}``)"
     )
 
 
@@ -221,10 +221,10 @@ def test_wrapper_exits_2_on_missing_dev_system() -> None:
 
 def test_wrapper_runs_and_exits_zero_under_either_path(tmp_path: Path) -> None:
     """Smoke test the wrapper in two configurations:
-      * if a sibling packetvoid-dev-system checkout is reachable at
+      * if a sibling trellis-dev-system checkout is reachable at
         the default location, the wrapper should run audit + check
         and exit 0 (REPORT_ONLY).
-      * if not, override PACKETVOID_DEV_SYSTEM_DIR to a path that
+      * if not, override TRELLIS_DEV_SYSTEM_DIR to a path that
         does NOT contain the scripts and confirm the wrapper exits 2
         (NEEDS_OPERATOR_ACTION) — that's the tool-missing branch.
     The two cases together prove both branches return the documented
@@ -233,7 +233,7 @@ def test_wrapper_runs_and_exits_zero_under_either_path(tmp_path: Path) -> None:
     # Branch B (always reproducible): force a missing dev-system path.
     bogus = tmp_path / "no-such-dev-system"
     env = os.environ.copy()
-    env["PACKETVOID_DEV_SYSTEM_DIR"] = str(bogus)
+    env["TRELLIS_DEV_SYSTEM_DIR"] = str(bogus)
     proc = subprocess.run(
         [str(_WRAPPER)], capture_output=True, text=True, env=env, check=False,
     )

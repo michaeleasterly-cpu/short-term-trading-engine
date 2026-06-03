@@ -231,7 +231,7 @@ Only items that close a real STE gap. Each: what it is, why STE benefits, one-li
 ### 3.4 `plugin.json` manifest if STE ever extracts `.claude/**` to a plugin
 
 - **What:** `.claude-plugin/plugin.json` (the upstream `plugins/code-review/.claude-plugin/plugin.json` is the minimal example — `{name, description, version, author}`).
-- **Why STE benefits:** the deferred `packetvoid-dev-system` extraction (TODO.md D0 + project memory) is exactly the use case. When the .claude surface is lifted into a reusable plugin, the manifest is mandatory for marketplace discoverability.
+- **Why STE benefits:** the deferred `trellis-dev-system` extraction (TODO.md D0 + project memory) is exactly the use case. When the .claude surface is lifted into a reusable plugin, the manifest is mandatory for marketplace discoverability.
 - **Would slot into:** D0 extraction work, not before. Listed here only so D0 inherits the canonical shape.
 
 ### 3.5 Adopt `examples/hooks/bash_command_validator_example.py` shape for any *future* Bash PreToolUse hook

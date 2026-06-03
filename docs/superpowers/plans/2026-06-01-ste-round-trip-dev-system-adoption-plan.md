@@ -1,10 +1,10 @@
-# STE round-trip adoption plan — packetvoid-dev-system (2026-06-01)
+# STE round-trip adoption plan — trellis-dev-system (2026-06-01)
 
 > **Phase: PLAN ONLY.** This document is the *only* artifact created or modified by this PR. No STE runtime code, configuration, rules, skills, hooks, agents, workflows, scripts, tests, or generated artifacts are changed. All adoption work is deferred to follow-up PRs sequenced in §S0–S7 below.
 
 ## Executive verdict
 
-The Packet Void dev system (`michaeleasterly-cpu/packetvoid-dev-system` at `882e852`, public + branch-protected) is **portability-validated** but not yet **STE-adoption-ready by overwrite**. STE's existing `.claude/`, `.github/workflows/`, and `docs/` surfaces are the *source of truth* from which the portable templates were originally extracted, and STE has accumulated domain-specific extensions (engine SDLC, data-feed lifecycle, risk path, ops daemons, lab/weekly-digest skills) that the portable seeds do not — and should not — replace.
+The Trellis dev system (`michaeleasterly-cpu/trellis-dev-system` at `882e852`, public + branch-protected) is **portability-validated** but not yet **STE-adoption-ready by overwrite**. STE's existing `.claude/`, `.github/workflows/`, and `docs/` surfaces are the *source of truth* from which the portable templates were originally extracted, and STE has accumulated domain-specific extensions (engine SDLC, data-feed lifecycle, risk path, ops daemons, lab/weekly-digest skills) that the portable seeds do not — and should not — replace.
 
 Adoption is therefore **additive-only and incremental**, never bulk-regenerate. The portable surface joins STE as a baseline-comparison gate (S2) and a profile declaration (S1); STE-specific overrides retain priority everywhere they exist.
 
@@ -14,10 +14,10 @@ The plan below classifies every STE artifact, identifies the conflicts that woul
 
 | Stage | Consumer | Profile | PR outcome | Fixes triggered in dev-system |
 |---|---|---|---|---|
-| D1 bootstrap | `packetvoid-d1-consumer-smoke` | `generic-python` | merged after 3 fix cycles | (PR #7) drop `cache: pip`; (PR #8) wrap pytest to swallow exit-5; (PR #9) ship portable `.gitleaks.toml` + Claude-review secret gate |
-| D1b real-edit | `packetvoid-d1-consumer-smoke` | `generic-python` | merged first try | none |
-| D2 bootstrap | `packetvoid-d2-railway-consumer-smoke` | `python-railway` | merged first try | none |
-| D2b real-edit | `packetvoid-d2-railway-consumer-smoke` | `python-railway` | merged first try | none |
+| D1 bootstrap | `trellis-d1-consumer-smoke` | `generic-python` | merged after 3 fix cycles | (PR #7) drop `cache: pip`; (PR #8) wrap pytest to swallow exit-5; (PR #9) ship portable `.gitleaks.toml` + Claude-review secret gate |
+| D1b real-edit | `trellis-d1-consumer-smoke` | `generic-python` | merged first try | none |
+| D2 bootstrap | `trellis-d2-railway-consumer-smoke` | `python-railway` | merged first try | none |
+| D2b real-edit | `trellis-d2-railway-consumer-smoke` | `python-railway` | merged first try | none |
 
 The dev system has therefore:
 - proven its bootstrap pipeline against 2 profile shapes;
@@ -162,7 +162,7 @@ STE branch protection: not changed by this plan. STE is currently public and the
 
 ### S2 — Read-only audit integration
 
-- New script `scripts/run_dev_system_audit.sh` wraps `python3 /Users/michael/packetvoid-dev-system/devsystem/scripts/audit_project.py --target-dir /Users/michael/short-term-trading-engine` (or a worktree path).
+- New script `scripts/run_dev_system_audit.sh` wraps `python3 /Users/michael/trellis-dev-system/devsystem/scripts/audit_project.py --target-dir /Users/michael/short-term-trading-engine` (or a worktree path).
 - Output: report-only drift list. Exit code never reds STE CI; the operator reads the report.
 - No artifact overwrite. No write. Pure file comparison.
 - Optional: extend with a `--report-mode` flag on the dev system that suppresses exit-code-1-on-drift and just prints findings.
@@ -210,7 +210,7 @@ STE branch protection: not changed by this plan. STE is currently public and the
 ### S7 — Optional regenerate-on-demand (NOT a regenerate-and-overwrite)
 
 - After S1–S6 prove drift is small and well-understood, evaluate adding a script:
-  - `python3 /Users/michael/packetvoid-dev-system/devsystem/scripts/bootstrap_project.py --profile-file PROJECT_PROFILE.yaml --target-dir <tmp>` into a *temp directory*.
+  - `python3 /Users/michael/trellis-dev-system/devsystem/scripts/bootstrap_project.py --profile-file PROJECT_PROFILE.yaml --target-dir <tmp>` into a *temp directory*.
   - Then a **selective copy** step that only updates artifacts whose drift was classified `PORTABLE_MATCH` in the S2 audit report.
   - The selective-copy step has a per-file allowlist; STE_OVERRIDE / STE_EXTENSION / CONFLICT artifacts are never in the allowlist.
 - This is the *only* mechanism by which STE files would ever be regenerated from the dev system. Even then, never against `/Users/michael/short-term-trading-engine` directly — always into a worktree, with a diff PR for operator review.
@@ -272,7 +272,7 @@ S2 work completed since the plan first landed:
 | S2 read-only audit wrapper | merged | PR #418 |
 | S5 workflow portability back-ports | merged | PR #419 |
 | PR-template `ops/engine_sdlc/**` checkbox fix | merged | PR #420 |
-| Dev-system pointer-only memstore semantics | merged | `packetvoid-dev-system` PR #10 |
+| Dev-system pointer-only memstore semantics | merged | `trellis-dev-system` PR #10 |
 
 After the dev-system PR #10 fix, `audit_project` no longer hard-errors on STE's pointer-only `PROJECT_PROFILE.yaml` and now successfully proceeds to file comparison. The drift it reports is precisely the §"Conflicts and non-overwrite rules" surface enumerated in this plan; it is not a defect.
 
@@ -330,4 +330,4 @@ Each row is a finding from `scripts/run_dev_system_audit.sh` stage 1 (`audit_pro
 
 ---
 
-> Status: PLAN ONLY. Adoption is staged across S1–S7 in follow-up PRs, with operator authorization at each stage. Cross-references: packetvoid-dev-system PRs #1–#10; consumer validation PRs at `packetvoid-d1-consumer-smoke` #1 #2 and `packetvoid-d2-railway-consumer-smoke` #1 #2; STE PRs #416 #417 #418 #419 #420.
+> Status: PLAN ONLY. Adoption is staged across S1–S7 in follow-up PRs, with operator authorization at each stage. Cross-references: trellis-dev-system PRs #1–#10; consumer validation PRs at `trellis-d1-consumer-smoke` #1 #2 and `trellis-d2-railway-consumer-smoke` #1 #2; STE PRs #416 #417 #418 #419 #420.

@@ -58,8 +58,8 @@ def test_todo_references_dev_system_summary() -> None:
     minimum the PR #10 fix that unblocks the audit wrapper, plus the
     D0a-D0g extraction range."""
     text = _todo_text()
-    assert "packetvoid-dev-system" in text, (
-        "TODO.md must name the packetvoid-dev-system source repo"
+    assert "trellis-dev-system" in text, (
+        "TODO.md must name the trellis-dev-system source repo"
     )
     # Memstore_reference fix on the dev-system side:
     assert (

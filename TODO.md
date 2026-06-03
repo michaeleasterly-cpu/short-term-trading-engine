@@ -736,7 +736,7 @@ holder of the ticker symbol. This is a different mutation pattern
 spec → plan → impl arc with explicit operator authorization.
 
 
-## STE dev-system round-trip — packetvoid-dev-system follow-ups
+## STE dev-system round-trip — trellis-dev-system follow-ups
 
 Operator follow-ups carried over from the closed STE round-trip
 arc — see "✅ STE dev-system round-trip — CLOSED 2026-06-01" below.
@@ -744,7 +744,7 @@ arc — see "✅ STE dev-system round-trip — CLOSED 2026-06-01" below.
 
 ## ✅ STE dev-system round-trip — CLOSED 2026-06-01
 
-> **Status 2026-06-01 — DONE.** STE has adopted the `packetvoid-dev-system` reusable Claude/dev workflow scaffold as its declared dev-system profile, with the portable workflow fixes back-ported and the residual STE-vs-portable drift formally documented as STE_OVERRIDE. Audit signal is now meaningful and steady-state. **No S6 or S7 work remains unless a future portable-template improvement appears that's net-additive to STE's richer canonical surface.**
+> **Status 2026-06-01 — DONE.** STE has adopted the `trellis-dev-system` reusable Claude/dev workflow scaffold as its declared dev-system profile, with the portable workflow fixes back-ported and the residual STE-vs-portable drift formally documented as STE_OVERRIDE. Audit signal is now meaningful and steady-state. **No S6 or S7 work remains unless a future portable-template improvement appears that's net-additive to STE's richer canonical surface.**
 
 ### What shipped — STE side
 
@@ -757,13 +757,13 @@ arc — see "✅ STE dev-system round-trip — CLOSED 2026-06-01" below.
 
 ### What shipped — dev-system side
 
-- **`packetvoid-dev-system` PRs #1–#9** — the D0a–D0g extraction sequence: skeleton, portable docs, scripts + bootstrap renderer, portable Claude surface (rules / skills / hooks / agents), GitHub workflow templates + profile seeds, dogfooded secret-scan gate. Public + branch-protected.
-- **`packetvoid-dev-system` PR #10** (`df1b0e3`) — **pointer-only `memstore_reference` semantics**: schema + renderer accept `api_memstores_enabled: true` with either inlined IDs OR a `memstore_reference` pointer. Unblocks STE's `audit_project` parser pathway against STE's pointer-only S1 profile without inlining memstore IDs anywhere new.
+- **`trellis-dev-system` PRs #1–#9** — the D0a–D0g extraction sequence: skeleton, portable docs, scripts + bootstrap renderer, portable Claude surface (rules / skills / hooks / agents), GitHub workflow templates + profile seeds, dogfooded secret-scan gate. Public + branch-protected.
+- **`trellis-dev-system` PR #10** (`df1b0e3`) — **pointer-only `memstore_reference` semantics**: schema + renderer accept `api_memstores_enabled: true` with either inlined IDs OR a `memstore_reference` pointer. Unblocks STE's `audit_project` parser pathway against STE's pointer-only S1 profile without inlining memstore IDs anywhere new.
 
 ### Consumer validation evidence
 
-- **D1 generic-python consumer** (`packetvoid-d1-consumer-smoke` PRs #1 #2): bootstrap PR merged after 3 fix cycles (each surfaced a real portability gap that landed back as a dev-system fix); real-edit PR merged first try.
-- **D2 python-railway consumer** (`packetvoid-d2-railway-consumer-smoke` PRs #1 #2): bootstrap PR merged first try; real-edit PR merged first try.
+- **D1 generic-python consumer** (`trellis-d1-consumer-smoke` PRs #1 #2): bootstrap PR merged after 3 fix cycles (each surfaced a real portability gap that landed back as a dev-system fix); real-edit PR merged first try.
+- **D2 python-railway consumer** (`trellis-d2-railway-consumer-smoke` PRs #1 #2): bootstrap PR merged first try; real-edit PR merged first try.
 - Four real PR cycles total on real GitHub infrastructure across two profile shapes — zero regressions on the railway side after the four D0g/D1 portability fixes landed.
 
 ### Steady-state operating expectation
@@ -782,14 +782,17 @@ arc — see "✅ STE dev-system round-trip — CLOSED 2026-06-01" below.
 ### Cross-references
 
 - Plan + addendum: `docs/superpowers/plans/2026-06-01-ste-round-trip-dev-system-adoption-plan.md` (PRs #416 + #421).
-- Dev system: <https://github.com/michaeleasterly-cpu/packetvoid-dev-system> (public, branch-protected `main-branch-protection` ruleset).
+- Dev system: <https://github.com/michaeleasterly-cpu/trellis-dev-system> (public, branch-protected `main-branch-protection` ruleset).
 - Round-trip ruleset fix (STE side): `main-branch-protection` `required_status_checks` corrected mid-sequence to reference actual check-run names (`pytest + ruff + check_imports`, `lab-isolation-db (Postgres-gated suites)`, `gitleaks (worktree + SARIF)`). Six consecutive STE PRs since (#416–#421) merged normal — no `--admin`.
 
-## packetvoid-dev-system — rename + gist (operator follow-up, 2026-06-02)
+## trellis-dev-system — rename + gist (operator follow-up, 2026-06-02)
 
-Follow-on to the closed STE round-trip arc above. The reusable Claude/dev workflow scaffold currently lives at <https://github.com/michaeleasterly-cpu/packetvoid-dev-system> with the working name `packetvoid-dev-system`. Operator follow-up items (no implementation yet):
+**Status 2026-06-03 — IN PROGRESS (alignment tail).** Rename `packetvoid-dev-system → Trellis` DONE: 3 GitHub repos renamed (`trellis-dev-system` + 2 consumer-smoke), dev-system content sweep merged (`trellis-dev-system` PR #12), on-disk dir renamed, STE-side reference sweep DONE (this commit; `PACKETVOID_DEV_SYSTEM_DIR`→`TRELLIS_DEV_SYSTEM_DIR`, slug + consumer-repo names across TODO/plan/profile/wrapper/sentinels; `packetvoidlabs` brand intentionally untouched). Phase-3 template alignment (settings.json.template `permissions.deny`/`defaultMode`/`worktree` + `.claude-plugin/plugin.json` + phase-3 alignment doc) IN FLIGHT as a `trellis-dev-system` PR. Remaining: 8th-grade readability rewrite + gist.
 
-- **Rename to a more marketable name.** Current name is internal/codename-shaped. Pick a name that's easy to say, easy to search, and reads as a product, not an internal tool. Constraints to preserve when renaming: existing two consumer smoke repos (`packetvoid-d1-consumer-smoke`, `packetvoid-d2-railway-consumer-smoke`) — rename plan should either rename them in lockstep or document why they keep the old codename. The STE side has live references in `TODO.md`, `docs/superpowers/plans/2026-06-01-ste-round-trip-dev-system-adoption-plan.md`, and the `PROJECT_PROFILE.yaml` consumer profile — any rename needs a coordinated sweep on the STE side too.
+Follow-on to the closed STE round-trip arc above. The reusable Claude/dev workflow scaffold lives at <https://github.com/michaeleasterly-cpu/trellis-dev-system>. Operator follow-up items:
+
+- ~~**Rename to a more marketable name** → **Trellis**.~~ **DONE 2026-06-03.**
+- **Rename to a more marketable name.** Current name is internal/codename-shaped. Pick a name that's easy to say, easy to search, and reads as a product, not an internal tool. Constraints to preserve when renaming: existing two consumer smoke repos (`trellis-d1-consumer-smoke`, `trellis-d2-railway-consumer-smoke`) — rename plan should either rename them in lockstep or document why they keep the old codename. The STE side has live references in `TODO.md`, `docs/superpowers/plans/2026-06-01-ste-round-trip-dev-system-adoption-plan.md`, and the `PROJECT_PROFILE.yaml` consumer profile — any rename needs a coordinated sweep on the STE side too.
 - **Publish a gist.** Operator wants a discoverable shortlink/landing snippet (GitHub Gist) for the dev system — likely the bootstrap one-liner + one-paragraph pitch + repo link. Most useful **after** the rename so the gist links the marketable name, not the codename. Defer until the rename lands or accept that the gist may need a re-publish.
 - **Rewrite the dev notes / howto at an 8th-grade reading level.** Today's `README.md`, the portable docs templates under `devsystem/docs/*.md.template`, and any README the rename produces are written in the same dense, jargon-forward voice STE itself uses. For a project meant to be adopted by people who *aren't* the operator, that voice is a barrier. Target audience: someone who can read a tech blog but is new to terms like "heavy lane", "sentinel", "spec-only PR", "DFCR", "ECR". Rewrite plan: short sentences, define each special term the first time it appears, lead with "what is this for" before "how is it organized", keep the canonical-SoT cross-links but move them after the plain-English overview. **Do not loosen the engineering content** (the rules, the heavy-lane discipline, the path-registry SoT contract) — those stay precise; the rewriting is for the surrounding prose only. Out of scope here: changing any rule semantics, any template logic, or any test/sentinel.
 - **Audit alignment with Anthropic's published reference repos.** Neither the STE round-trip arc nor the dev-system extraction systematically checked Anthropic's open-source repos (e.g. `anthropics/claude-code`, the `claude-code-action` source, any published example skills / agents / hooks / cookbook entries) — both arcs leaned on the public docs surface at `code.claude.com/docs/en/*` plus STE's lived practice. That's a real gap: if Anthropic ships canonical patterns for hooks / agent profiles / skills, the right move is to align (or document why we diverge), not to reinvent. Audit deliverable: a short doc enumerating (a) where STE's `.claude/` + the dev-system templates align with Anthropic's published examples, (b) where they diverge and why (intentional STE_OVERRIDE vs. unknowing drift), (c) any canonical surface worth pulling in. Out of scope here: implementation. If the audit surfaces real divergence-from-canon, it becomes its own spec arc.

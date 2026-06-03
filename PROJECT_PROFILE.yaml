@@ -2,7 +2,7 @@
 # (docs/superpowers/plans/2026-06-01-ste-round-trip-dev-system-adoption-plan.md)
 #
 # This file DECLARES STE's current dev-system posture so the Packet
-# Void dev system (https://github.com/michaeleasterly-cpu/packetvoid-dev-system,
+# Void dev system (https://github.com/michaeleasterly-cpu/trellis-dev-system,
 # fintech-research seed shape) has a profile to read against in
 # read-only audits (S2). It is NOT a regeneration spec — at S1, STE
 # renders nothing from this file.
