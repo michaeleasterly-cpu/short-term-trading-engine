@@ -34,7 +34,7 @@ For each of the 6 STE-hand-rolled surfaces the morning audit named, Anthropic pu
 Both audits' operator-decision queues together — 18 items total. Order suggested for processing:
 
 **Tier 1 — low risk + high value (recommend doing first):**
-- Vendor-audit #7: `commit-commands` vendor.
+- ~~Vendor-audit #7: `commit-commands` vendor~~ **DONE 2026-06-04** — vendored `/commit`, `/commit-push-pr`, `/clean-gone` as STE skills under `.claude/skills/{commit,commit-push-pr,clean-gone}/SKILL.md`. STE conventions encoded: HEREDOC commit bodies, conventional-commit prefixes, Co-Authored-By footer, `gh pr checks <n>` discipline, `--force-with-lease` over `--force`, no main-branch push, safe-by-default cleanup that refuses dirty/locked worktrees and never touches the main checkout. All three are slash-only (`disable-model-invocation: true`). Sentinel: `tests/test_claude_skills_present.py` updated.
 - Vendor-audit #2: `silent-failure-hunter` agent (after adapting to STE silent-skip vocabulary).
 - Controls-audit #5: `permissions.deny` block in `.claude/settings.json`.
 - ~~Controls-audit #4: subagent `worktree.baseRef: fresh` + CI merge-base sentinel~~ **DONE 2026-06-04** — `.claude/settings.json` flipped to `baseRef: "fresh"`; CI sentinel at `.github/workflows/branch-base-sentinel.yml`; sentinel test at `tests/test_branch_base_sentinel_present.py`; CLAUDE.md updated. The implementer agents (`engine-implementer`, `adapter-implementer`, `db-architect`) already carry `isolation: worktree` so their dispatches branch from origin/main per Anthropic's documented subagent isolation semantics.
