@@ -36,6 +36,13 @@ _SKILLS = (
     # C0.4 — model-invocable security-review skill walked by the
     # security-guidance rule on security-sensitive diffs.
     ("security-review", True),
+    # C0.8 (2026-06-04) — commit-commands plugin vendored from
+    # anthropics/claude-code per vendor-vs-hand-rolled audit §7.
+    # All three are slash-only — git mutations must be operator-explicit,
+    # not model-fired.
+    ("commit", False),
+    ("commit-push-pr", False),
+    ("clean-gone", False),
 )
 
 
