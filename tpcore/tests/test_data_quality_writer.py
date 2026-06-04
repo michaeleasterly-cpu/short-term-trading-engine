@@ -69,15 +69,45 @@ async def test_write_inserts_new_row_returns_true() -> None:
     assert len(pool.conn.calls) == 1
     sql, args = pool.conn.calls[0]
     assert "INSERT INTO platform.data_quality_log" in sql
-    assert "ON CONFLICT" in sql
-    assert "DO NOTHING" in sql
+    # Plan 2 redesign: kind discriminator stamped 'validation'; notes cast to jsonb.
+    assert "'validation'" in sql
+    assert "$7::jsonb" in sql
+    # The old UNIQUE(source, timestamp) was dropped → no ON CONFLICT anymore.
+    assert "ON CONFLICT" not in sql
 
 
-async def test_write_idempotent_on_conflict_returns_false() -> None:
-    """Second call with same (source, timestamp) returns False (no row written)."""
+async def test_write_no_row_written_returns_false() -> None:
+    """When RETURNING yields no row (no pool wrote it), write() returns False."""
     pool = _FakePool(fetchrow_result=None)  # asyncpg returns None when RETURNING produces no row
     wrote = await DataQualityWriter(pool).write(_score())
     assert wrote is False
+
+
+async def test_write_wraps_plain_text_notes_as_jsonb() -> None:
+    """Free-text notes (not valid JSON) are wrapped as {"text": ...} so the
+    jsonb column stays valid."""
+    pool = _FakePool(fetchrow_result={"?column?": 1})
+    score = DataQualityScore(
+        source="validation.freshness",
+        timestamp=datetime(2026, 5, 10, 6, 0, tzinfo=UTC),
+        latency_ms=1,
+        missing_bars=0,
+        stale=False,
+        confidence=Decimal("1.000"),
+        notes="stale by 3 days",  # plain text, NOT JSON
+    )
+    await DataQualityWriter(pool).write(score)
+    _, args = pool.conn.calls[0]
+    assert '{"text": "stale by 3 days"}' in args
+
+
+async def test_write_passes_through_valid_json_notes() -> None:
+    """Already-valid JSON notes pass through unchanged (downstream JSON readers)."""
+    pool = _FakePool(fetchrow_result={"?column?": 1})
+    score = _score()  # notes='{"failures": []}' is valid JSON
+    await DataQualityWriter(pool).write(score)
+    _, args = pool.conn.calls[0]
+    assert '{"failures": []}' in args
 
 
 async def test_write_passes_score_fields() -> None:
