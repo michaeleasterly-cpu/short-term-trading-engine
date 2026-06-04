@@ -1,9 +1,9 @@
 """Live/paper parity harness.
 
 Submits the *same* order to both paper and live Alpaca endpoints and
-records the fill drift to ``platform.parity_drift_log``. A growing drift
-is an early signal of broker-side behavior changes or strategy
-assumptions that no longer hold.
+records the fill drift to ``platform.data_quality_log`` (``kind='parity_drift'``;
+Plan 2 consolidation). A growing drift is an early signal of broker-side
+behavior changes or strategy assumptions that no longer hold.
 
 Operational rules:
 
@@ -92,9 +92,9 @@ class LivePaperParityHarness:
 
         Before submitting we snapshot the ticker's most-recent
         ``spread_observations`` row — when the row lands in
-        ``parity_drift_log`` later, downstream drift analysis can see
-        what the quoted spread looked like at submission time, not just
-        the fill price.
+        ``data_quality_log`` (kind='parity_drift') later, downstream drift
+        analysis can see what the quoted spread looked like at submission
+        time, not just the fill price.
 
         Returns a record even when the live side fails — failure populates
         ``live_fill_price=None`` and a log entry explains why.
@@ -233,30 +233,35 @@ class LivePaperParityHarness:
         )
 
     async def _persist(self, record: ParityDriftRecord) -> None:
+        """Persist the drift record to ``platform.data_quality_log``
+        (``kind='parity_drift'``; Plan 2 consolidation — the dedicated
+        ``parity_drift_log`` table was dropped in migration 0300).
+
+        All ParityDriftRecord fields live in the jsonb ``notes``; the
+        ``timestamp`` column carries the submission time so the weekly summary
+        can window on it. The typed metric columns stay NULL (validation-only)."""
         if self._pool is None:
             return
-        sql = """
-            INSERT INTO platform.parity_drift_log (
-                client_order_id, paper_fill_price, live_fill_price, drift_bps,
-                paper_filled_at, live_filled_at, timestamp,
-                spread_at_order_pct, spread_observed_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-        """
+        from tpcore.quality.data_quality import KIND_PARITY_DRIFT, write_row
+
+        notes = {
+            "client_order_id": record.client_order_id,
+            "paper_fill_price": record.paper_fill_price,
+            "live_fill_price": record.live_fill_price,
+            "drift_bps": record.drift_bps,
+            "paper_filled_at": record.paper_filled_at,
+            "live_filled_at": record.live_filled_at,
+            "spread_at_order_pct": record.spread_at_order_pct,
+            "spread_observed_at": record.spread_observed_at,
+        }
         try:
-            async with self._pool.acquire() as conn:
-                await conn.execute(
-                    sql,
-                    record.client_order_id,
-                    record.paper_fill_price,
-                    record.live_fill_price,
-                    record.drift_bps,
-                    record.paper_filled_at,
-                    record.live_filled_at,
-                    record.timestamp,
-                    record.spread_at_order_pct,
-                    record.spread_observed_at,
-                )
+            await write_row(
+                self._pool,
+                kind=KIND_PARITY_DRIFT,
+                source=record.client_order_id,
+                timestamp=record.timestamp,
+                notes=notes,
+            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning(
                 "tpcore.parity.persist_failed",
@@ -289,24 +294,29 @@ async def weekly_drift_summary(
     engine_id: str | None = None,
     days: int = 7,
 ) -> DriftSummary:
-    """Aggregate ``parity_drift_log`` rows from the last ``days`` days.
+    """Aggregate parity-drift rows from the last ``days`` days.
 
-    The schema doesn't store engine_id directly today; we infer by matching
-    the ``client_order_id`` prefix (``sigma_``, ``reversion_``, ``vector_``).
-    Pass ``engine_id=None`` for an all-engines summary.
+    Plan 2: parity drift rows live in ``platform.data_quality_log``
+    (``kind='parity_drift'``); ``drift_bps`` + ``client_order_id`` are read from
+    the jsonb ``notes``. The schema doesn't store engine_id directly; we infer
+    by matching the ``client_order_id`` prefix (``sigma_``, ``reversion_``,
+    ``vector_``). Pass ``engine_id=None`` for an all-engines summary.
     """
-    where = "timestamp >= now() - $1::interval"
+    where = "kind = 'parity_drift' AND timestamp >= now() - $1::interval"
     params: list = [f"{days} days"]
     if engine_id:
-        where += " AND client_order_id LIKE $2"
+        where += " AND notes->>'client_order_id' LIKE $2"
         params.append(f"{engine_id}_%")
     sql = f"""
         SELECT
             count(*) AS n,
-            COALESCE(avg(drift_bps), 0)::float AS avg_bps,
-            COALESCE(percentile_cont(0.95) WITHIN GROUP (ORDER BY drift_bps), 0)::float AS p95_bps
-        FROM platform.parity_drift_log
-        WHERE {where} AND drift_bps IS NOT NULL
+            COALESCE(avg((notes->>'drift_bps')::numeric), 0)::float AS avg_bps,
+            COALESCE(
+                percentile_cont(0.95) WITHIN GROUP (
+                    ORDER BY (notes->>'drift_bps')::numeric),
+                0)::float AS p95_bps
+        FROM platform.data_quality_log
+        WHERE {where} AND notes->>'drift_bps' IS NOT NULL
     """
     async with pool.acquire() as conn:
         row = await conn.fetchrow(sql, *params)

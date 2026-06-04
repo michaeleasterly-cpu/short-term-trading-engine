@@ -1,6 +1,7 @@
 """Tests for `tpcore.parity.harness.LivePaperParityHarness`."""
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -59,6 +60,9 @@ class _CapturingPool:
     """
 
     def __init__(self, spread_row: dict | None = None) -> None:
+        # ``calls`` captures the persistence INSERT (Plan 2: the parity row
+        # now lands in data_quality_log via write_row → conn.fetchrow with an
+        # INSERT…RETURNING). ``fetchrow_calls`` captures the spread lookup.
         self.calls: list[tuple[str, tuple]] = []
         self.fetchrow_calls: list[tuple[str, tuple]] = []
         self._spread_row = spread_row
@@ -70,6 +74,9 @@ class _CapturingPool:
         self.calls.append((sql, args))
 
     async def fetchrow(self, sql, *args):  # type: ignore[no-untyped-def]
+        if "INSERT INTO platform.data_quality_log" in sql:
+            self.calls.append((sql, args))
+            return {"?column?": 1}
         self.fetchrow_calls.append((sql, args))
         return self._spread_row
 
@@ -159,15 +166,21 @@ async def test_live_failure_does_not_raise_and_records_paper_only() -> None:
     assert len(pool.calls) == 1
 
 
-async def test_persistence_sql_targets_parity_drift_log() -> None:
+async def test_persistence_sql_targets_data_quality_log_parity_kind() -> None:
     paper = _StubBroker(fill_price=Decimal("100"), filled_at=datetime(2026, 5, 10, 14, 30, tzinfo=UTC))
     live = _StubBroker(fill_price=Decimal("100.05"), filled_at=datetime(2026, 5, 10, 14, 30, 1, tzinfo=UTC))
     pool = _CapturingPool()
     h = LivePaperParityHarness(paper, live, pool)
     await h.submit_pair(_order())
     sql, args = pool.calls[0]
-    assert "INSERT INTO platform.parity_drift_log" in sql
-    assert args[0] == "vector_AAA_1234567890"
+    # Plan 2: parity rows land in data_quality_log (kind='parity_drift').
+    # write_row binds (kind, source, timestamp, latency_ms, missing_bars,
+    #                  stale, confidence, notes_jsonb).
+    assert "INSERT INTO platform.data_quality_log" in sql
+    assert args[0] == "parity_drift"
+    assert args[1] == "vector_AAA_1234567890"
+    notes = json.loads(args[7])
+    assert notes["client_order_id"] == "vector_AAA_1234567890"
 
 
 async def test_no_pool_skips_persistence_but_still_returns_record() -> None:
@@ -200,15 +213,19 @@ async def test_persist_includes_spread_snapshot_when_observation_exists() -> Non
     lookup_sql, lookup_args = pool.fetchrow_calls[0]
     assert "platform.spread_observations" in lookup_sql
     assert lookup_args == ("AAA",)
-    # INSERT body carries the snapshot values.
-    insert_sql, insert_args = pool.calls[0]
-    assert "spread_at_order_pct" in insert_sql
-    assert insert_args[7] == Decimal("0.0017")
-    assert insert_args[8] == snapshot_at
+    # INSERT notes jsonb carries the snapshot values (Plan 2: data_quality_log
+    # kind='parity_drift'; spread fields are inside notes, not positional cols).
+    insert_args = pool.calls[0][1]
+    notes = json.loads(insert_args[7])
+    # write_row serializes notes with json.dumps(default=str); Decimal/datetime
+    # become their str() form.
+    assert notes["spread_at_order_pct"] == "0.0017"
+    assert notes["spread_observed_at"] == str(snapshot_at)
 
 
 async def test_persist_records_null_spread_when_no_observation_yet() -> None:
-    """No row → NULL columns on the parity_drift_log insert, no crash."""
+    """No row → null spread fields in the notes jsonb, no crash (Plan 2:
+    data_quality_log kind='parity_drift')."""
     pool = _CapturingPool(spread_row=None)
     paper = _StubBroker(fill_price=Decimal("100"), filled_at=datetime(2026, 5, 12, 19, 55, tzinfo=UTC))
     live = _StubBroker(fill_price=Decimal("100.05"), filled_at=datetime(2026, 5, 12, 19, 55, 1, tzinfo=UTC))
@@ -217,5 +234,6 @@ async def test_persist_records_null_spread_when_no_observation_yet() -> None:
     assert rec.spread_at_order_pct is None
     assert rec.spread_observed_at is None
     insert_args = pool.calls[0][1]
-    assert insert_args[7] is None
-    assert insert_args[8] is None
+    notes = json.loads(insert_args[7])
+    assert notes["spread_at_order_pct"] is None
+    assert notes["spread_observed_at"] is None
