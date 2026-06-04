@@ -5,17 +5,26 @@ recovery path off the local filesystem. D2 — the still-pending half
 of the LOCKED 2026-05-18 archive-substrate migration — moves the
 DETECTION path: shrinkage is no longer judged against a single-prior
 CSV that may not even exist on a fresh Railway deploy, but against
-the ROLLING MEDIAN of durable per-source history kept in
-``platform.ingestion_metrics``.
+the ROLLING MEDIAN of durable per-source run history.
+
+Plan 2 consolidation (2026-06-04): the dedicated ``platform.ingestion_metrics``
+table is DROPPED (migration 0300); D2 run-count history now lives in
+``platform.ingest_manifest`` — the existing per-ingest reconciliation
+substrate (P4, 2026-05-25). D2 metric rows are tagged
+``source_locator = 'd2_metrics'`` + ``provider = 'd2_metrics'`` so they are
+trivially separable from the archive-first lifecycle rows
+(``manifest_lifecycle`` / ``tpcore.ingestion.manifest``) that share the
+table. The reader filters on that tag so the rolling median is computed over
+D2 rows ONLY — no double-count against the lifecycle rows.
 
 Two surfaces:
 
 * :func:`record_ingestion_metrics` — call AFTER every successful
-  archive write. Persists row_count + optional date range + optional
-  coverage_pct for the source. One INSERT per call; the (source,
-  ingested_at) PK keeps the table append-only.
+  archive write. Persists ``actual_rows`` + optional date range for the
+  source as a ``status='ok'`` D2-metric ``ingest_manifest`` row. One INSERT
+  per call; ``pulled_at`` server-side ``now()`` keeps it append-only.
 
-* :func:`check_shrinkage_vs_rolling_median` — read the last N runs
+* :func:`check_shrinkage_vs_rolling_median` — read the last N D2 rows
   for the source, compute the median, return a ``ShrinkageVerdict``.
   A run that lands materially below the median (default 20%) is
   flagged ``shrunk=True``. The threshold mirrors the v1 single-prior
@@ -27,8 +36,8 @@ Both detectors run in parallel — when they disagree the caller
 emits a ``SHRINKAGE_DETECTORS_DISAGREE`` event for forensic visibility.
 A v2 PR retires the old detector after a defined soak period.
 
-Separability principle: this module reads ONLY
-``platform.ingestion_metrics``. The R3 S3 substrate is for recovery —
+Separability principle: this module reads ONLY the D2-tagged
+``platform.ingest_manifest`` rows. The R3 S3 substrate is for recovery —
 never read here. The OLD CSV-archive directory is detection-irrelevant
 once this module is wired everywhere.
 """
@@ -51,21 +60,27 @@ logger = structlog.get_logger(__name__)
 DEFAULT_ROLLING_WINDOW = 10
 DEFAULT_SHRINKAGE_THRESHOLD_PCT = 0.20
 
+# Tag distinguishing D2 run-count rows from the archive-first lifecycle rows
+# that share platform.ingest_manifest. Written into BOTH provider +
+# source_locator (the latter is NOT NULL) so the reader's filter is unambiguous.
+_D2_TAG = "d2_metrics"
+
 
 _INSERT_SQL = """
-INSERT INTO platform.ingestion_metrics
-    (source, row_count, min_date, max_date, coverage_pct)
+INSERT INTO platform.ingest_manifest
+    (source, provider, source_locator, actual_rows, status,
+     date_range_start, date_range_end)
 VALUES
-    ($1, $2, $3, $4, $5)
+    ($1, $2, $2, $3, 'ok', $4, $5)
 """
 
 
 _RECENT_SQL = """
-SELECT row_count
-FROM platform.ingestion_metrics
-WHERE source = $1
-ORDER BY ingested_at DESC
-LIMIT $2
+SELECT actual_rows AS row_count
+FROM platform.ingest_manifest
+WHERE source = $1 AND source_locator = $2
+ORDER BY pulled_at DESC
+LIMIT $3
 """
 
 
@@ -108,10 +123,14 @@ async def record_ingestion_metrics(
 ) -> None:
     """Persist a single ingestion-run metric row.
 
-    Call AFTER a successful archive write. Idempotent in the sense
-    that ``ingested_at`` is server-side ``now()`` — two simultaneous
-    calls (the unlikely double-fire case) land two rows with distinct
-    timestamps; neither overwrites the other.
+    Call AFTER a successful archive write. Lands a ``status='ok'`` D2-metric
+    row in ``platform.ingest_manifest`` (tagged ``source_locator='d2_metrics'``).
+    Append-only: ``pulled_at`` is server-side ``now()`` so two simultaneous
+    calls land two rows with distinct timestamps; neither overwrites the other.
+
+    ``coverage_pct`` is accepted for back-compat but no longer persisted —
+    ``ingest_manifest`` has no such column and D2 only reads ``actual_rows``;
+    callers that need coverage should use the validation suite, not this hook.
 
     Errors are logged + swallowed (parity with ``DBLogHandler.log``).
     A metrics-write failure must never block the producer — the
@@ -123,10 +142,10 @@ async def record_ingestion_metrics(
             await conn.execute(
                 _INSERT_SQL,
                 source,
+                _D2_TAG,
                 int(row_count),
                 min_date,
                 max_date,
-                None if coverage_pct is None else float(coverage_pct),
             )
         logger.info(
             "d2_metrics.recorded",
@@ -173,7 +192,7 @@ async def check_shrinkage_vs_rolling_median(
         )
 
     async with pool.acquire() as conn:
-        rows = await conn.fetch(_RECENT_SQL, source, rolling_window)
+        rows = await conn.fetch(_RECENT_SQL, source, _D2_TAG, rolling_window)
     history = [int(r["row_count"]) for r in rows]
 
     if not history:

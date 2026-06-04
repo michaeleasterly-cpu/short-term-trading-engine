@@ -2216,9 +2216,10 @@ async def handle_macro_indicators(
         assert_not_shrunk(shrinkage)  # producer hard-stop (FRED-truncation class)
 
     # ── 4b. D2 substrate: durable per-source metrics + rolling-median ──
-    # Record THIS run's metrics in platform.ingestion_metrics so the
-    # next FRED ingest's shrinkage check can compare against the
-    # rolling median rather than the single-prior CSV. Run the new
+    # Record THIS run's metrics as a D2-tagged platform.ingest_manifest row
+    # (Plan 2: ingestion_metrics folded into ingest_manifest) so the next
+    # FRED ingest's shrinkage check can compare against the rolling median
+    # rather than the single-prior CSV. Run the new
     # detector in PARALLEL with the v1 single-prior detector — when
     # they disagree emit ``SHRINKAGE_DETECTORS_DISAGREE`` for forensic
     # visibility. A v2 PR retires the v1 detector after a soak period.

@@ -40,10 +40,11 @@ class _FakeConn:
         self.executed: list[tuple] = []
 
     async def fetch(self, sql: str, *args) -> list[dict]:
-        # The d2_metrics _RECENT_SQL takes (source, limit); we ignore
-        # the source in the fake (one fake per source) and respect the
-        # limit so the test exercises the LIMIT clause.
-        limit = args[1] if len(args) >= 2 else len(self.history)
+        # Plan 2: _RECENT_SQL takes (source, d2_tag, limit) against
+        # platform.ingest_manifest. We ignore source + tag in the fake (one
+        # fake per source) and respect the limit so the test exercises the
+        # LIMIT clause.
+        limit = args[2] if len(args) >= 3 else len(self.history)
         return [{"row_count": rc} for rc in self.history[:limit]]
 
     async def execute(self, sql: str, *args) -> None:
@@ -91,7 +92,7 @@ def test_default_threshold_matches_v1_detector() -> None:
 @pytest.mark.asyncio
 async def test_record_metrics_inserts_row() -> None:
     """Behaviour (a): one INSERT per call carrying the row count
-    and the optional fields verbatim."""
+    and the optional fields verbatim (Plan 2: D2-tagged ingest_manifest row)."""
     conn = _FakeConn(history=[])
     pool = _FakePool(conn)
     await record_ingestion_metrics(
@@ -99,10 +100,11 @@ async def test_record_metrics_inserts_row() -> None:
     )
     assert len(conn.executed) == 1
     args = conn.executed[0]
-    # (source, row_count, min_date, max_date, coverage_pct)
+    # (source, d2_tag, actual_rows, min_date, max_date) — provider+source_locator
+    # both bind $2 (the d2 tag) in the SQL.
     assert args[0] == "fred_macro"
-    assert args[1] == 12345
-    assert args[2] is None
+    assert args[1] == "d2_metrics"
+    assert args[2] == 12345
     assert args[3] is None
     assert args[4] is None
 
