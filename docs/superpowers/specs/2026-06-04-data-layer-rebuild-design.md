@@ -1,6 +1,6 @@
 # Data-layer rebuild — design spec v1.4 (clean re-ingest, identity-first)
 
-**Status:** SPEC v1.4 — gated docs-only deliverable (heavy-lane step 3). NO code, NO DDL, NO migration, NO DB access in this PR. The 7 moratoria of `docs/audits/2026-06-03-identity-substrate-data-flow.md` §4 remain in force: **no DB mutation until this spec is operator-approved.** This spec is the input the operator needs to lift the moratoria for the rebuild plan PR.
+**Status:** SPEC v1.4 — **APPROVED by operator 2026-06-04.** The 7 moratoria of `docs/audits/2026-06-03-identity-substrate-data-flow.md` §4 are **LIFTED** for the implementation plan (`docs/superpowers/plans/2026-06-04-data-layer-rebuild-*.md`) and its gated execution. DB mutation proceeds ONLY per the plan's own per-phase gates (heavy-lane; whole-suite + order-flip authoritative). This doc remains the design SoT; the plan is the execution sequence. Execution-time writer pause (engine/lane/trade-monitor + the cleared data-operations cron) per §8.1 — finish before momentum's next monthly rebalance (~late June 2026).
 
 ## Revision history
 

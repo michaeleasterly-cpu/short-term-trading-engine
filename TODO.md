@@ -584,6 +584,12 @@ gate refuses orders on terminally-delisted tickers.
 
 ## ⚑ Identity substrate / data-flow audit — 2026-06-03
 
+**▶ REBUILD STATUS (2026-06-04): SPEC APPROVED → IMPLEMENTING.** Spec `docs/superpowers/specs/2026-06-04-data-layer-rebuild-design.md` v1.4 operator-approved; 7 moratoria LIFTED. Plan decomposed into 4 sequenced plans (`docs/superpowers/plans/2026-06-04-data-layer-rebuild-*.md`):
+- [ ] **Plan 1 — identity-predicate half-open fix (14 triggers + dispatcher + resolver) + aar_events FK** — AUTHORED, non-destructive, ships first. Execute via subagent-driven-development.
+- [ ] **Plan 2 — clean-schema cutover (the wipe):** DROP set, data_quality_log redesign, lifetime_start NOT-NULL/no-default, FQ 3-part PK, PRESERVE carve-out `{ingest_manifest, allocations, risk_close_ledger}`, spread-retention disable-during-load. IRREVERSIBLE.
+- [ ] **Plan 3 — identity-first re-ingest:** pause engine/lane/trade-monitor (before momentum's late-June rebalance; it's LIVE w/ ~160 paper positions), restore data-ops cron after; universe→issuers→identity→prices→fundamentals→signals; re-attribution verify + FK VALIDATE.
+- [ ] **Plan 4 — validation green-gate:** 32-check 100%-green, DATA_OPERATIONS_COMPLETE, doc refresh (DATABASE_AND_DATAFLOW §2/§3).
+
 Read-only audit of identity master, ticker_history, prices_daily,
 fundamentals_quarterly, lifecycle substrate, writer triggers, and
 consumer bypass landed at
