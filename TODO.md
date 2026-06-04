@@ -4,6 +4,14 @@ Cross-cutting personal action items that don't fit existing docs. Operational
 build queues belong in `docs/DATABASE_AND_DATAFLOW.md §5 Implementation Queue`
 or `docs/MASTER_PLAN.md §9 Build Order`.
 
+## ⚑ macro_data scope leak — per-state/LWA data wrongly written to the DB (2026-06-04)
+
+**Defect:** the LWA-25 county/state economic series (`cle_coles_*`, `crb_jackson_*`, `phci_*`, `sos_*`, …) were written into `platform.macro_data` — but they were **never supposed to be in the trading-engine database**. They are a DIFFERENT scope (the public LWA dashboards), not market macro. A prior ingestion/recommendation put them there; `macro_data` (tall + bitemporal, 186,937 rows and growing) now co-mingles two domains and grows unbounded — the per-state sprawl is the bulk.
+
+**Target state:** `macro_data` = **market-only** (FRED market indicators VIX / yield_curve / Sahm / `credit_spread` / SACRED `hy_spread` + AAII / CNN F&G sentiment). The per-state economic data moves to its own entity owned by the dashboards project — or out of the DB entirely if it belongs only in the dashboards layer.
+
+**Scope:** SEPARATE arc — **NOT** part of the ticker/identity data-layer rebuild (`docs/superpowers/specs/2026-06-04-data-layer-rebuild-design.md` OQ-6); `macro_data` stays untouched by that rebuild. This arc: audit (what stage wrote the per-state series, where they should live) → spec → migrate the per-state data out → then address `macro_data` growth (partition / retention / bitemporal pruning). SACRED `hy_spread` preserved throughout (backed up to `data/macro_hy_spread_sacred_archive/` + `s3://ste-archives/macro_hy_spread_sacred_archive/`; recovery source at `data/hy_spread_recovery/`).
+
 ## ⚑ Vendor-vs-hand-rolled audit (2026-06-03 PM)
 
 Follow-up to the morning audit's "What the original audit got wrong" section. Docs-only audit landed at `docs/audits/2026-06-03-vendor-vs-handrolled.md`. Sentinel: `tests/test_vendor_vs_handrolled_audit_documented.py`. **No implementation included in the audit PR.**

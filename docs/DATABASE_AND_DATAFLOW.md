@@ -1,11 +1,34 @@
 ---
 title: Short-Term Trading Engine — Database & Dataflow
-version: 1.1.0
-last_updated: 2026-05-14
+version: 1.2.0
+last_updated: 2026-06-03
 entities: [Engine, Position, Order, Trade, AAR, RiskState, DataQuality]
 stack: [PostgreSQL, Supabase Pro, Alpaca, Railway, Python, asyncpg, Pydantic v2]
 phase_1_complete: true  # Universe expanded from ~50 to 7,694 tickers; see docs/EDGE_VALIDATION_PLAN.md
 ---
+
+## 0. START HERE — Data-layer work index
+
+> **Read this section FIRST on ANY data-layer task** (schema, ingest, validation, identity, backfill, repair, audit). It is the single map of every canonical source so they don't have to be rediscovered piecemeal. This doc is the data-layer SoT; the §2 schema below currently LAGS the live DB (it predates the TKR-14 identity layer — see the identity audit) and is being rebuilt.
+
+- **Invariants & lessons-learned (the rebuild MUST preserve ALL of these):** `docs/DATA_INVARIANTS.md` — 113 sourced data invariants across 12 themes (identity, source authority, ingest, PIT, provenance, validation, survivorship, scrape-fragility, schema/PK, Supabase ops, SACRED series, ISO standards). Read it so no documented mistake is re-committed.
+- **Schema + dataflow:** this doc (§2 tables, §3 dataflow). **Live truth = `platform/migrations/**` + the live DB** — verify against them; the doc can lag.
+- **Identity model (the spine):** `ticker + date → classification_id → CIK`, SCD-2 `ticker_history`. Rule `.claude/rules/identity-path.md`. Writers prove the chain; readers pass `as_of`; SEC-first authority.
+- **Identity DESIGN SoT — READ before changing/redesigning identity (it is already decided):** `docs/superpowers/specs/2026-05-23-referential-integrity-design-v2.2.md` (TKR-14 internal smart-key PK for securities — ISO-7064/3166 anchored, **embeds the issuer-hash**; `cik`/`figi`/`cusip`/`isin` are UNIQUE-NULLABLE companions; **CIK = "US issuers, NULL otherwise" — NEVER a PK**) + corp-history epic migration `platform/migrations/versions/20260524_1600_corp_history_v1.py` (issuers `issuer_id` surrogate PK; cik/lei nullable-unique; **M:N `issuer_securities` SCD-2** for merger-driven issuer↔security transfer; `issuer_history` issuer SCD-2). The internal IDs are TKR-14 (security) + issuer_id (issuer) — do NOT propose CIK-as-PK; that contradicts the documented design.
+- **Audits — read before ANY data repair:** `docs/audits/2026-06-03-identity-substrate-data-flow.md` (identity-substrate baseline + 15-step repair order + **7 moratoria** — dispositive). Rebuild spec: `docs/superpowers/specs/` (data-layer rebuild, once written).
+- **Gates (mandatory before a fix in data paths):** `.claude/rules/discovery-first.md` → `/system-wide-verification` + `/change-impact-classification`.
+- **Source roster (DFCR to change — never hand-edit `tpcore/providers.py`):**
+  - Daily prices: **FMP** primary (full CTA tape); **Alpaca** IEX/SIP fallback. **NEVER Alpaca for backfill** (close-date semantics differ — invariant B1).
+  - Identity / fundamentals / filings: **SEC EDGAR** (bulk `submissions.zip` first; `full_history=True` for correct FPFD); FMP fallback for non-US only.
+  - Macro **FRED** · short interest **FINRA** · borrow **IBorrowDesk** · insider **Finnhub** · social **ApeWisdom** · retail **AAII**. **`hy_spread` is SACRED — copy verbatim on re-ingest, NEVER re-pull/re-derive (invariant K1).**
+  - **Tradier: CLOSED — account decommissioned 2026-06-03.** No Tradier adapter, no options data; `tradier_options_chains` → DROP; `options_max_pain`/greeks → RETIRED; no options-based engines/features.
+- **Ingest:** `scripts/ops.py --stage <name> --param …` (stage registry — NEVER a one-off script); daily via `scripts/run_data_operations.sh`; CSV-first per `.claude/rules/data-adapter.md`; handlers in `tpcore/ingestion/handlers.py`.
+- **Identity writers:** `backfill_sec_metadata` (FPFD/CIK, SEC-first), `symbol_history_evidence_backfill` (predecessors). 15 SCD-2 `BEFORE INSERT` triggers (`platform/migrations/20260524_1500_*`) auto-assign `classification_id` from `ticker_history` (INSERT-only).
+- **Validation:** `tpcore/quality/validation/` (32 checks); `DATA_OPERATIONS_COMPLETE` only on 100% green (`.claude/rules/selfheal-auditheal.md`); `prices_daily_completeness` = zero-tolerance.
+- **Readers:** `tpcore/data/repositories/prices.py` (PricesRepo — use the `as_of` path), `tpcore/identity/dispatcher.py` (pass `as_of`), the 7 engines.
+- **DB access + Supabase ops (see `DATA_INVARIANTS.md` §J):** `tpcore.db.build_asyncpg_pool(url, read_only=True)` for inspection. `DATABASE_URL_IPV4` = Supavisor transaction pooler `:6543` (`statement_cache_size=0`); DDL + bulk `COPY` need **session mode** (`:5432`). Disk ≈ **18 GB** (auto-resized from 8 GB after the 2026-05-23 97% incident — check the UI, assumed caps are stale); **auto read-only at ~95%**, 4h resize cooldown, **no superuser CHECKPOINT**. `TRUNCATE` (not DELETE) reclaims disk immediately. **Chunked DML for >100K rows** (100K/chunk, commit each, ~0.5s sleep) + **streaming commits** — a single-txn 21M-row UPDATE blew 1.95 GB WAL → read-only.
+- **Daemons (stop before repair):** `railway.json` (Railway services), `~/Library/LaunchAgents/com.michael.trading.*.plist` (local launchd).
+- **Memory tiers:** `CLAUDE.md` (1) → local `MEMORY.md` (2) → memstore `memstore_01P5DiJJgau4NhMMekaZDQEN` `/agent-context/*` (3) → `docs/**` + tests (4).
 
 ## 2. Database Schema
 
