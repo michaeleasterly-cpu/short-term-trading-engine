@@ -1048,8 +1048,11 @@ async def run_unknown_knowns(pool, sink: _FindingSink | None = None) -> list[Aud
     # ``aar_events`` is empty by design pre-graduation: engines that
     # haven't cleared the DSR/credibility gate are paper-only and don't
     # close positions yet. Will populate as engines graduate to live.
+    # forensics_triggers + parity_drift_log were DROPPED (Plan 2 / migration
+    # 0300; folded into data_quality_log via ``kind``) — they no longer appear
+    # in information_schema, so they're removed from the expected-empty set.
     EXPECTED_EMPTY = {
-        "forensics_triggers", "open_orders", "allocations", "parity_drift_log",
+        "open_orders", "allocations",
         "universe_candidates", "alembic_version", "aar_events",
     }
     unexpected = [t for t in empty if t not in EXPECTED_EMPTY]
@@ -1377,39 +1380,32 @@ async def _persist(pool, findings: list[AuditFinding], run_ts: datetime) -> None
     Source key: ``data_pipeline_audit.<phase>.<check_name>.<source>`` —
     includes the finding's source so multiple findings under the same
     (phase, check_name) — e.g. one freshness row per data source —
-    don't collide on the ``(source, timestamp)`` unique constraint.
+    stay distinguishable.
+
+    Plan 2 consolidation: routes through the canonical
+    ``tpcore.quality.data_quality.write_row`` (kind='validation'; jsonb notes;
+    uuid PK so no ``ON CONFLICT`` and no (source, timestamp) collision risk).
     """
-    rows = []
+    from tpcore.quality.data_quality import KIND_VALIDATION, write_row
+
     for f in findings:
         confidence = {"OK": Decimal("1.000"), "WARN": Decimal("0.700"), "FAIL": Decimal("0.000")}[f.severity]
         # Replace any chars that make the source key awkward to parse later.
         clean_source = f.source.replace(":", "-")
-        rows.append((
-            f"data_pipeline_audit.{f.phase}.{f.check_name}.{clean_source}",
-            run_ts,
-            0,
-            0,
-            f.severity != "OK",
-            confidence,
-            json.dumps({
+        await write_row(
+            pool,
+            kind=KIND_VALIDATION,
+            source=f"data_pipeline_audit.{f.phase}.{f.check_name}.{clean_source}",
+            timestamp=run_ts,
+            latency_ms=0,
+            missing_bars=0,
+            stale=f.severity != "OK",
+            confidence=confidence,
+            notes={
                 "summary": f.summary, "severity": f.severity,
                 "evidence": _jsonify(f.evidence),
                 "recommended_action": f.recommended_action,
-            })[:8000],
-        ))
-    if not rows:
-        return
-    async with pool.acquire() as conn:
-        # ON CONFLICT DO NOTHING — re-running the audit within the same
-        # second is rare but a no-op if it happens (idempotent).
-        await conn.executemany(
-            """
-            INSERT INTO platform.data_quality_log
-                (source, timestamp, latency_ms, missing_bars, stale, confidence, notes)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (source, timestamp) DO NOTHING
-            """,
-            rows,
+            },
         )
 
 

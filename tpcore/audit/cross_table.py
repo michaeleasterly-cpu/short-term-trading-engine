@@ -17,7 +17,6 @@ uses ``NOT EXISTS … prices_daily_tickers`` — identical to
 """
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -100,12 +99,10 @@ CROSS_TABLE_CHECKS: tuple[CrossTableCheck, ...] = (
         sql="SELECT COUNT(*) /*corporate_actions/orphan_no_prices*/ FROM platform.corporate_actions ca LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = ca.ticker WHERE p.ticker IS NULL"),
     CrossTableCheck(table="fundamentals_quarterly", check_name="orphan_no_prices",
         sql="SELECT COUNT(*) /*fundamentals_quarterly/orphan_no_prices*/ FROM platform.fundamentals_quarterly fq LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p ON p.ticker = fq.ticker WHERE p.ticker IS NULL"),
-    CrossTableCheck(table="tradier_options_chains", check_name="null_ticker",
-        sql="SELECT COUNT(*) /*tradier_options_chains/null_ticker*/ FROM platform.tradier_options_chains WHERE ticker IS NULL"),
-    CrossTableCheck(table="tradier_options_chains", check_name="expiration_in_past",
-        sql="SELECT COUNT(*) /*tradier_options_chains/expiration_in_past*/ FROM platform.tradier_options_chains WHERE expiration_date < CURRENT_DATE"),
-    CrossTableCheck(table="tradier_options_chains", check_name="orphan_no_prices",
-        sql="SELECT COUNT(*) /*tradier_options_chains/orphan_no_prices*/ FROM platform.tradier_options_chains tc WHERE NOT EXISTS (SELECT 1 FROM platform.prices_daily_tickers t WHERE t.ticker = tc.ticker)"),
+    # tradier_options_chains checks REMOVED (Plan 2 Phase 0 / migration 0300):
+    # the table is dropped (Tradier closed). The convergence-contract example
+    # (orphan predicate == cross_ref_cleanup delete) now lives only in the
+    # _stage_cross_ref_cleanup docstring; no live check reads the dropped table.
 )
 
 _OK = Decimal("1.000")
@@ -117,10 +114,15 @@ async def run_cross_table_audit(
 ) -> list[CrossTableFinding]:
     """Run every declared check; optionally persist structured rows to
     data_quality_log under ``cross_table_audit.<table>.<check_name>``
-    using the audit_data_pipeline._persist severity convention."""
+    using the audit_data_pipeline._persist severity convention.
+
+    Persistence routes through the canonical ``tpcore.quality.data_quality.write_row``
+    (kind='validation'; Plan 2 consolidation) — one row per check, jsonb notes,
+    no ``ON CONFLICT`` (the redesigned table has a uuid PK)."""
+    from tpcore.quality.data_quality import KIND_VALIDATION, write_row
+
     run_ts = datetime.now(UTC)
     findings: list[CrossTableFinding] = []
-    rows: list[tuple] = []
     async with pool.acquire() as conn:
         for c in CROSS_TABLE_CHECKS:
             raw = await conn.fetchval(c.sql)
@@ -129,26 +131,21 @@ async def run_cross_table_audit(
             findings.append(
                 CrossTableFinding(c.table, c.check_name, n, sev)
             )
-            rows.append((
-                f"cross_table_audit.{c.table}.{c.check_name}",
-                run_ts, 0, 0,
-                sev != "OK",
-                _OK if sev == "OK" else _FAIL,
-                json.dumps({
-                    "table": c.table, "check_name": c.check_name,
-                    "count": n, "severity": sev,
-                })[:8000],
-            ))
-        if persist and rows:
-            await conn.executemany(
-                """
-                INSERT INTO platform.data_quality_log
-                    (source, timestamp, latency_ms, missing_bars,
-                     stale, confidence, notes)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                ON CONFLICT (source, timestamp) DO NOTHING
-                """,
-                rows,
+    if persist:
+        for f in findings:
+            await write_row(
+                pool,
+                kind=KIND_VALIDATION,
+                source=f"cross_table_audit.{f.table}.{f.check_name}",
+                timestamp=run_ts,
+                latency_ms=0,
+                missing_bars=0,
+                stale=f.severity != "OK",
+                confidence=_OK if f.severity == "OK" else _FAIL,
+                notes={
+                    "table": f.table, "check_name": f.check_name,
+                    "count": f.count, "severity": f.severity,
+                },
             )
     n_red = sum(1 for f in findings if f.severity != "OK")
     logger.info("cross_table_audit.done", checks=len(findings), red=n_red)

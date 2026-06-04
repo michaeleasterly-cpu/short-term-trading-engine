@@ -17,6 +17,10 @@ from tpcore.audit.cross_table import (
 class _Conn:
     def __init__(self, counts: dict[str, int]) -> None:
         self._counts = counts
+        # Persisted rows are now captured per-row via the canonical
+        # write_row path (kind='validation' + jsonb notes, uuid PK, no
+        # ON CONFLICT) — fetchrow returns RETURNING 1 so write_row reports
+        # a successful write.
         self.persisted: list[tuple] = []
 
     async def fetchval(self, sql: str):
@@ -25,8 +29,11 @@ class _Conn:
                 return n
         return 0
 
-    async def executemany(self, sql: str, rows) -> None:
-        self.persisted.extend(rows)
+    async def fetchrow(self, sql: str, *args):
+        # write_row INSERT … RETURNING 1; record (kind, source, ts,
+        # latency_ms, missing_bars, stale, confidence, notes).
+        self.persisted.append(args)
+        return {"?column?": 1}
 
 
 class _CM:
@@ -59,20 +66,10 @@ def test_sot_is_nonempty_and_well_formed() -> None:
     assert len({c.key for c in CROSS_TABLE_CHECKS}) == len(CROSS_TABLE_CHECKS), "duplicate (table, check_name) key"
 
 
-def test_tradier_orphan_predicate_matches_cross_ref_cleanup() -> None:
-    orphan = next(
-        c for c in CROSS_TABLE_CHECKS
-        if c.table == "tradier_options_chains"
-        and c.check_name == "orphan_no_prices"
-    )
-    assert "prices_daily_tickers" in orphan.sql
-    assert "NOT EXISTS" in orphan.sql.upper()
-    expired = next(
-        c for c in CROSS_TABLE_CHECKS
-        if c.table == "tradier_options_chains"
-        and c.check_name == "expiration_in_past"
-    )
-    assert "expiration_date < CURRENT_DATE" in expired.sql
+def test_tradier_checks_removed_with_dropped_table() -> None:
+    # Plan 2 / migration 0300 drops platform.tradier_options_chains (Tradier
+    # closed). No cross-table check may read the dropped table.
+    assert not any(c.table == "tradier_options_chains" for c in CROSS_TABLE_CHECKS)
 
 
 async def test_run_persists_fail_and_ok_rows_with_convention() -> None:
@@ -84,17 +81,20 @@ async def test_run_persists_fail_and_ok_rows_with_convention() -> None:
     red = by_key[(target.table, target.check_name)]
     assert red.count == 3 and red.severity == "FAIL"
 
-    persisted = {r[0]: r for r in pool.conn.persisted}
+    # write_row args: (kind, source, timestamp, latency_ms, missing_bars,
+    #                  stale, confidence, notes_jsonb_text)
+    persisted = {r[1]: r for r in pool.conn.persisted}
     red_src = f"cross_table_audit.{target.table}.{target.check_name}"
     assert red_src in persisted
     row = persisted[red_src]
-    assert row[2] == 0 and row[3] == 0
-    assert row[4] is True
-    assert row[5] == Decimal("0.000")
+    assert row[0] == "validation"  # kind discriminator
+    assert row[3] == 0 and row[4] == 0  # latency_ms, missing_bars
+    assert row[5] is True  # stale
+    assert row[6] == Decimal("0.000")  # confidence
     green = next(f for f in findings if f.severity == "OK")
     g_src = f"cross_table_audit.{green.table}.{green.check_name}"
-    assert persisted[g_src][4] is False
-    assert persisted[g_src][5] == Decimal("1.000")
+    assert persisted[g_src][5] is False
+    assert persisted[g_src][6] == Decimal("1.000")
 
 
 async def test_persist_false_skips_writes() -> None:

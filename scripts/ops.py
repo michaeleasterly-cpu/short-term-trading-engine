@@ -83,6 +83,22 @@ SEC_FILINGS_STAGE_TIMEOUT_SEC = 21600.0  # 6 hours
 # by the teardown DELETE predicate.  Single constant keeps the 4 sites in sync
 # so a divergence can never make teardown silently fail to clean injected rows.
 _CANARY_INJECTION_SOURCE = "canary_injection"
+
+# Canonical INSERT for the symbol-history-evidence forensic rows into the
+# redesigned platform.data_quality_log (Plan 2 migration 20260604_0500):
+# kind='validation' discriminator, jsonb notes, uuid PK ⇒ no ON CONFLICT.
+# $1 = source, $2 = notes (jsonb-cast). The typed metric columns are the
+# validation-only constants this evidence row carries (latency/missing=0,
+# stale=FALSE, confidence=1.000). Single constant keeps the in-transaction
+# evidence sites (same_cik_no_open_window / pre_dates_change / batch flush)
+# in lockstep on the new shape.
+_DQL_VALIDATION_INSERT_SQL = """
+    INSERT INTO platform.data_quality_log
+        (kind, source, timestamp, latency_ms, missing_bars,
+         stale, confidence, notes)
+    VALUES ('validation', $1, NOW(), 0, 0, FALSE, 1.000, $2::jsonb)
+"""
+
 DATA_FRESHNESS_MAX_DAYS = 4  # 2 trading days + weekend buffer
 CORP_ACTIONS_FRESHNESS_MAX_DAYS = 7
 
@@ -4997,13 +5013,7 @@ async def _stage_symbol_history_evidence_backfill(
                     # No open-ended row — pre-existing temporal gap.
                     # Don't fabricate one; emit forensic dql + skip.
                     await conn.execute(
-                        """
-                        INSERT INTO platform.data_quality_log
-                            (source, timestamp, latency_ms, missing_bars,
-                             stale, confidence, notes)
-                        VALUES ($1, NOW(), 0, 0, FALSE, 1.000, $2)
-                        ON CONFLICT (source, timestamp) DO NOTHING
-                        """,
+                        _DQL_VALIDATION_INSERT_SQL,
                         (
                             f"symbol_history_evidence_backfill."
                             f"{old_symbol_val}"
@@ -5034,13 +5044,7 @@ async def _stage_symbol_history_evidence_backfill(
                     # temporal conflict; emit dql + skip rather than write
                     # a row that would still overlap or invert.
                     await conn.execute(
-                        """
-                        INSERT INTO platform.data_quality_log
-                            (source, timestamp, latency_ms, missing_bars,
-                             stale, confidence, notes)
-                        VALUES ($1, NOW(), 0, 0, FALSE, 1.000, $2)
-                        ON CONFLICT (source, timestamp) DO NOTHING
-                        """,
+                        _DQL_VALIDATION_INSERT_SQL,
                         (
                             f"symbol_history_evidence_backfill."
                             f"{old_symbol_val}"
@@ -5097,13 +5101,7 @@ async def _stage_symbol_history_evidence_backfill(
         if data_quality_log_inserts:
             async with conn.transaction():
                 await conn.executemany(
-                    """
-                    INSERT INTO platform.data_quality_log
-                        (source, timestamp, latency_ms, missing_bars,
-                         stale, confidence, notes)
-                    VALUES ($1, NOW(), 0, 0, FALSE, 1.000, $2)
-                    ON CONFLICT (source, timestamp) DO NOTHING
-                    """,
+                    _DQL_VALIDATION_INSERT_SQL,
                     data_quality_log_inserts,
                 )
             n_dql_written = len(data_quality_log_inserts)
@@ -6290,8 +6288,8 @@ async def _stage_evaluate_provider_parity(
             await conn.execute(
                 """
                 INSERT INTO platform.data_quality_log
-                    (source, timestamp, confidence, stale, notes)
-                VALUES ($1, NOW(), $2, $3, $4)
+                    (kind, source, timestamp, confidence, stale, notes)
+                VALUES ('validation', $1, NOW(), $2, $3, $4::jsonb)
                 """,
                 f"evaluate.{feed}.{candidate}",
                 confidence_for_verdict,

@@ -69,9 +69,10 @@ async def test_write_inserts_new_row_returns_true() -> None:
     assert len(pool.conn.calls) == 1
     sql, args = pool.conn.calls[0]
     assert "INSERT INTO platform.data_quality_log" in sql
-    # Plan 2 redesign: kind discriminator stamped 'validation'; notes cast to jsonb.
-    assert "'validation'" in sql
-    assert "$7::jsonb" in sql
+    # Plan 2 redesign: kind discriminator is bound as $1 (not inlined); the
+    # canonical write_row path stamps 'validation' for the writer. notes cast to jsonb.
+    assert args[0] == "validation"
+    assert "$8::jsonb" in sql
     # The old UNIQUE(source, timestamp) was dropped → no ON CONFLICT anymore.
     assert "ON CONFLICT" not in sql
 
