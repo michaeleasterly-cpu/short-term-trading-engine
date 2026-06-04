@@ -155,19 +155,29 @@ def test_drawdown_period_fires_once_per_peak() -> None:
 
 
 class _FakeConn:
+    """Fake conn for the Plan-2 dql_store path (data_quality_log
+    kind='forensics_trigger'). The EXISTS check binds
+    (kind_const, trigger_kind, fingerprint); the INSERT binds
+    (kind_const, source, fired_at, notes_json)."""
+
     def __init__(self) -> None:
         self.fired: list[tuple[str, str]] = []
         self.inserted: list[tuple[str, str]] = []
 
     async def fetchval(self, sql: str, *args: Any) -> Any:
-        if "INSERT INTO platform.forensics_triggers" in sql:
-            self.inserted.append((args[0], args[1]))
+        if "INSERT INTO platform.data_quality_log" in sql:
+            # args = (kind_const, source, fired_at, notes_json)
+            self.inserted.append((args[1], args[3]))
             return 42
-        # exists-check: return True if already fired.
-        kind, fingerprint = args
-        if (kind, fingerprint) in self.fired:
+        # EXISTS check: args = (kind_const, trigger_kind, fingerprint).
+        _kind_const, trigger_kind, fingerprint = args
+        if (trigger_kind, fingerprint) in self.fired:
             return 1
-        self.fired.append((kind, fingerprint))
+        self.fired.append((trigger_kind, fingerprint))
+        return None
+
+    async def execute(self, sql: str, *args: Any) -> None:
+        # set_dossier_path UPDATE — no-op for the idempotency test.
         return None
 
 
@@ -197,7 +207,7 @@ async def test_persist_trigger_skips_when_fingerprint_already_fired() -> None:
     )
     first = await service.persist_trigger(trigger)
     second = await service.persist_trigger(trigger)
-    assert first == 42
+    assert first == "42"  # uuid id stringified (here the fake returns 42)
     assert second is None
     # Only one INSERT, despite two persist calls.
     assert len(conn.inserted) == 1
@@ -222,12 +232,15 @@ class _FlakyConn:
         self.calls = 0
 
     async def fetchval(self, sql: str, *args: Any) -> Any:
-        if "INSERT INTO platform.forensics_triggers" in sql:
+        if "INSERT INTO platform.data_quality_log" in sql:
             self.calls += 1
             if self.calls == 1:
                 raise RuntimeError("connection reset by peer")
             return 99
-        # exists-check: always say "doesn't exist" so persist is tried.
+        # EXISTS check: always say "doesn't exist" so persist is tried.
+        return None
+
+    async def execute(self, sql: str, *args: Any) -> None:
         return None
 
 

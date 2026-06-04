@@ -16,12 +16,13 @@ Three trigger kinds, one detector each:
 
 Idempotency: each trigger carries a deterministic ``fingerprint`` in
 ``payload``; the inserter skips rows that already exist with the same
-``(trigger_kind, payload->>'fingerprint')``. Re-running daily is safe.
+``(trigger_kind, fingerprint)``. Re-running daily is safe. Persistence is to
+``platform.data_quality_log`` (``kind='forensics_trigger'``; Plan 2
+consolidation) via ``tpcore.forensics.dql_store``.
 """
 
 from __future__ import annotations
 
-import json
 import statistics
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -200,21 +201,6 @@ def detect_drawdown_period(aars: list[AARRow]) -> list[ForensicsTrigger]:
 # ────────────────────────────────────────────────────────────────────────
 
 
-_EXISTS_SQL = """
-    SELECT 1
-    FROM platform.forensics_triggers
-    WHERE trigger_kind = $1
-      AND payload->>'fingerprint' = $2
-    LIMIT 1
-"""
-
-_INSERT_SQL = """
-    INSERT INTO platform.forensics_triggers (trigger_kind, payload, fired_at)
-    VALUES ($1, $2::jsonb, $3)
-    RETURNING id
-"""
-
-
 class ForensicsService:
     """Run all detectors against ``platform.aar_events`` and persist new triggers."""
 
@@ -234,49 +220,54 @@ class ForensicsService:
             *detect_drawdown_period(aars),
         ]
 
-    async def persist_trigger(self, trigger: ForensicsTrigger) -> int | None:
+    async def persist_trigger(self, trigger: ForensicsTrigger) -> str | None:
         """INSERT a trigger, skipping if its fingerprint already fired.
 
+        Persists to ``platform.data_quality_log`` (``kind='forensics_trigger'``;
+        Plan 2 consolidation) via the shared ``tpcore.forensics.dql_store``.
+        Returns the new row's uuid id as a string, or ``None`` when the
+        fingerprint already exists.
+
         On insert, also writes a Sprint Dossier markdown file under
-        ``docs/sprints/`` and records the path in the trigger's payload
+        ``docs/sprints/`` and records the path in the trigger's ``notes``
         (``dossier_path``). The dossier write is best-effort: filesystem
         failure is logged but doesn't roll back the DB row.
         """
+        from tpcore.forensics import dql_store
+
         now = datetime.now(UTC)
         async with self._pool.acquire() as conn:
-            exists = await conn.fetchval(
-                _EXISTS_SQL, trigger.trigger_kind.value, trigger.fingerprint
-            )
-            if exists:
+            if await dql_store.fingerprint_exists(
+                conn,
+                trigger_kind=trigger.trigger_kind.value,
+                fingerprint=trigger.fingerprint,
+            ):
                 return None
-            trigger_id = await conn.fetchval(
-                _INSERT_SQL,
-                trigger.trigger_kind.value,
-                json.dumps(trigger.payload, default=str),
-                now,
+            trigger_id = await dql_store.insert_trigger(
+                conn,
+                trigger_kind=trigger.trigger_kind.value,
+                engine=trigger.engine,
+                payload=trigger.payload,
+                fired_at=now,
             )
         # Best-effort dossier write — failure here doesn't unwind the row.
         try:
             from tpcore.forensics.dossier import write_dossier
 
-            path = write_dossier(trigger=trigger, trigger_id=int(trigger_id), fired_at=now)
+            path = write_dossier(
+                trigger=trigger, trigger_id=str(trigger_id), fired_at=now
+            )
             async with self._pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    UPDATE platform.forensics_triggers
-                       SET payload = payload || jsonb_build_object('dossier_path', $1::text)
-                     WHERE id = $2
-                    """,
-                    str(path),
-                    int(trigger_id),
+                await dql_store.set_dossier_path(
+                    conn, trigger_id=trigger_id, dossier_path=str(path)
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "forensics.dossier_write_failed",
-                trigger_id=int(trigger_id) if trigger_id else None,
+                trigger_id=str(trigger_id) if trigger_id else None,
                 error=str(exc),
             )
-        return int(trigger_id)
+        return str(trigger_id)
 
     async def run(self) -> dict[str, int]:
         """Detect across all engines, persist new triggers, return counts.

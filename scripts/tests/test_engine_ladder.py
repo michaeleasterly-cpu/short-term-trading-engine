@@ -114,10 +114,10 @@ FRESH = NOW - timedelta(days=1)  # within grace
 
 def _conn(esc_rows, open_fps):
     """esc_rows: rows the candidate-SQL returns; open_fps: fingerprints
-    still open in forensics_triggers."""
+    still open (data_quality_log kind='forensics_trigger')."""
     class _C:
         async def fetch(self, sql, *a):
-            if "forensics_triggers" in sql:
+            if "notes->>'fingerprint'" in sql:
                 return [{"fp": fp} for fp in open_fps]
             cutoff = a[0] if a else None
             if cutoff is not None:
@@ -198,7 +198,7 @@ def _rec_pool(open_hold_ids):
         def __init__(self):
             self.inserts = []
         async def fetch(self, sql, *a):
-            if "forensics_triggers" in sql:
+            if "notes->>'fingerprint'" in sql:
                 return [{"fp": "fp-open"}]  # still unresolved → open
             if "ENGINE_ESCALATED" in sql:
                 hid = a[0]
@@ -279,7 +279,7 @@ async def test_disposition_rejects_escalate_only_all_fps_resolved_no_write():
     class _C:
         def __init__(self): self.inserts = []
         async def fetch(self, sql, *a):
-            if "forensics_triggers" in sql:
+            if "notes->>'fingerprint'" in sql:
                 return []  # zero still-open fingerprints
             if "ENGINE_ESCALATED" in sql:
                 return [{"engine": "reversion", "has_held": False,
@@ -306,7 +306,7 @@ async def test_disposition_accepts_escalate_only_fp_still_open_one_write():
     class _C:
         def __init__(self): self.inserts = []
         async def fetch(self, sql, *a):
-            if "forensics_triggers" in sql:
+            if "notes->>'fingerprint'" in sql:
                 return [{"fp": "fp-live"}]  # still unresolved → open
             if "ENGINE_ESCALATED" in sql:
                 return [{"engine": "vector", "has_held": False,

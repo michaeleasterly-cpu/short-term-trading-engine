@@ -3,8 +3,8 @@
 Run from the daily data-operations pipeline (or by hand). Reads every engine's
 AAR history out of ``platform.aar_events``, detects drawdown periods,
 loss clusters, and outlier losses, and INSERTs new triggers into
-``platform.forensics_triggers``. Re-running is safe (idempotent via
-fingerprint).
+``platform.data_quality_log`` (``kind='forensics_trigger'``; Plan 2
+consolidation). Re-running is safe (idempotent via fingerprint).
 """
 
 from __future__ import annotations

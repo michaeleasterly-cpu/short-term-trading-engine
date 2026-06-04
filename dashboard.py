@@ -801,28 +801,17 @@ async def _fetch_platform_health() -> dict:
         }
 
     async def _q_forensics() -> dict:
-        """Open forensics triggers (resolved_at IS NULL) — by kind + by age."""
+        """Open forensics triggers (open = notes.resolved_at NULL) — by kind + by age.
+
+        Plan 2: forensics triggers live in ``platform.data_quality_log``
+        (``kind='forensics_trigger'``); reads route through the shared
+        ``tpcore.forensics.dql_store`` SQL so the kind filter + open predicate
+        stay in lockstep with the producer."""
+        from tpcore.forensics.dql_store import OPEN_COUNTS_BY_KIND_SQL, OPEN_RECENT_SQL
+
         async with pool.acquire() as conn:
-            counts = await conn.fetch(
-                """
-                SELECT trigger_kind,
-                       COUNT(*) AS open_count,
-                       MIN(fired_at) AS oldest_open_at
-                FROM platform.forensics_triggers
-                WHERE resolved_at IS NULL
-                GROUP BY trigger_kind
-                ORDER BY trigger_kind
-                """
-            )
-            recent = await conn.fetch(
-                """
-                SELECT id, trigger_kind, payload, fired_at
-                FROM platform.forensics_triggers
-                WHERE resolved_at IS NULL
-                ORDER BY fired_at DESC
-                LIMIT 20
-                """
-            )
+            counts = await conn.fetch(OPEN_COUNTS_BY_KIND_SQL)
+            recent = await conn.fetch(OPEN_RECENT_SQL)
         return {
             "by_kind": [
                 {
@@ -834,7 +823,7 @@ async def _fetch_platform_health() -> dict:
             ],
             "recent": [
                 {
-                    "id": int(r["id"]),
+                    "id": str(r["id"]),
                     "kind": r["trigger_kind"],
                     "payload": r["payload"] if isinstance(r["payload"], dict) else json.loads(r["payload"]),
                     "fired_at": r["fired_at"],
@@ -2567,15 +2556,15 @@ def render_platform_health() -> None:
                     st.rerun()
 
 
-async def _mark_forensics_resolved(trigger_id: int) -> None:
-    """Set ``resolved_at = NOW()`` on the trigger row."""
+async def _mark_forensics_resolved(trigger_id: str) -> None:
+    """Mark a forensics trigger resolved (Plan 2: sets ``notes.resolved_at``
+    on the ``platform.data_quality_log`` row via the shared dql_store)."""
+    from tpcore.forensics import dql_store
+
     pool = await build_asyncpg_pool(_db_url(), max_size=2)
     try:
         async with pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE platform.forensics_triggers SET resolved_at = now() WHERE id = $1",
-                trigger_id,
-            )
+            await dql_store.mark_resolved(conn, trigger_id=trigger_id)
     finally:
         await pool.close()
 

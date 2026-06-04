@@ -60,7 +60,7 @@ def _fmt_payload_block(payload: dict) -> str:
 def render_dossier(
     *,
     trigger: ForensicsTrigger,
-    trigger_id: int,
+    trigger_id: int | str,
     fired_at: datetime,
 ) -> str:
     """Return the markdown body for a Sprint Dossier."""
@@ -124,7 +124,7 @@ When the fix ships:
 """
 
 
-def dossier_path(*, trigger: ForensicsTrigger, trigger_id: int, fired_at: datetime) -> Path:
+def dossier_path(*, trigger: ForensicsTrigger, trigger_id: int | str, fired_at: datetime) -> Path:
     """Deterministic file path for this trigger's dossier."""
     SPRINTS_DIR.mkdir(parents=True, exist_ok=True)
     day = fired_at.strftime("%Y-%m-%d")
@@ -135,7 +135,7 @@ def dossier_path(*, trigger: ForensicsTrigger, trigger_id: int, fired_at: dateti
 def write_dossier(
     *,
     trigger: ForensicsTrigger,
-    trigger_id: int,
+    trigger_id: int | str,
     fired_at: datetime,
 ) -> Path:
     """Render and write the dossier file. Returns the absolute path."""

@@ -164,22 +164,24 @@ class _Store:
 # ---------------------------------------------------------------------------
 
 class _Conn:
+    """Plan 2: forensics triggers live in platform.data_quality_log
+    (kind='forensics_trigger'); the producer routes through
+    tpcore.forensics.dql_store. The fragments below mirror that store's SQL
+    (EXISTS + INSERT via fetchval; open-for-engine via fetch with
+    notes->>'resolved_at' IS NULL; teardown DELETE on notes->>'source')."""
+
     def __init__(self, store: _Store) -> None:
         self._s = store
 
     async def fetchrow(self, sql: str, *args) -> dict | None:
-        sql_norm = " ".join(sql.split())
-        # dedup SELECT for inject: trigger_kind=$1 AND payload->>'fingerprint'=$2
-        if "forensics_triggers" in sql_norm and "fingerprint" in sql_norm:
-            kind, fp = args[0], args[1]
-            return self._s.dedup_trigger(kind, fp)
-        # Should not be reached in this harness (current_hold is patched)
+        # No longer used for forensics dedup (now fetchval); kept defensive.
         return None
 
     async def fetch(self, sql: str, *args) -> list[dict]:
         sql_norm = " ".join(sql.split())
-        # _open_triggers: resolved_at IS NULL AND payload->>'engine' = $1
-        if "forensics_triggers" in sql_norm and "resolved_at IS NULL" in sql_norm:
+        # dql_store.OPEN_FOR_ENGINE_SQL: notes->>'resolved_at' IS NULL
+        #                                AND notes->>'engine' = $1
+        if "data_quality_log" in sql_norm and "notes->>'resolved_at' IS NULL" in sql_norm:
             engine = args[0]
             rows = self._s.open_triggers_for(engine)
             # Return FakeRecord objects so r["field"] works
@@ -187,22 +189,30 @@ class _Conn:
         return []
 
     async def fetchval(self, sql: str, *args) -> object:
+        sql_norm = " ".join(sql.split())
+        # dql_store EXISTS check: kind=$1 AND notes->>'trigger_kind'=$2
+        #                         AND notes->>'fingerprint'=$3
+        if "data_quality_log" in sql_norm and "notes->>'fingerprint'" in sql_norm:
+            _kind_const, trigger_kind, fp = args[0], args[1], args[2]
+            row = self._s.dedup_trigger(trigger_kind, fp)
+            return 1 if row else None
+        # dql_store INSERT: (kind_const, source, fired_at, notes_json) RETURNING id
+        if "INSERT INTO platform.data_quality_log" in sql_norm:
+            notes_json, fired_at = args[3], args[2]
+            notes = json.loads(notes_json) if isinstance(notes_json, str) else notes_json
+            trigger_kind = notes.get("trigger_kind")
+            self._s.insert_trigger(trigger_kind, notes, fired_at)
+            return "ca-uuid-0001"
         # _already_ran: patched neutral, but route defensively
         return None
 
     async def execute(self, sql: str, *args) -> str:
         sql_norm = " ".join(sql.split())
-        # teardown DELETE
-        if "DELETE FROM platform.forensics_triggers" in sql_norm:
-            source = args[0]
+        # teardown DELETE: kind=$1 AND notes->>'source'=$2
+        if "DELETE FROM platform.data_quality_log" in sql_norm:
+            source = args[1]
             self._s.delete_by_source(source)
             return "DELETE N"
-        # INSERT forensics_triggers
-        if "INSERT INTO platform.forensics_triggers" in sql_norm:
-            kind, payload_json, fired_at = args[0], args[1], args[2]
-            payload = json.loads(payload_json) if isinstance(payload_json, str) else payload_json
-            self._s.insert_trigger(kind, payload, fired_at)
-            return "INSERT 0 1"
         # INSERT application_log
         if "INSERT INTO platform.application_log" in sql_norm:
             engine, run_id, event_type, severity, message, data_json = (

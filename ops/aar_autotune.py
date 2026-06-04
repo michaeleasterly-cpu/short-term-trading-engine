@@ -1,6 +1,8 @@
 """AAR Auto-Tune (Sub-project DA-2).
 
-Deterministic behavioral control: reads platform.forensics_triggers
+Deterministic behavioral control: reads forensics triggers (Plan 2:
+platform.data_quality_log WHERE kind='forensics_trigger', via the shared
+tpcore.forensics.dql_store read SQL)
 and, on SYSTEMIC decay signals (loss_cluster >= LOSS_CLUSTER_HOLD_LEN,
 drawdown_period), stands the engine down by emitting ENGINE_HELD with
 failure_class="behavioral" (reusing DA-1's tpcore.supervisor_state
@@ -84,19 +86,17 @@ async def _emit_cleared(pool, engine: str, hold_id: str,
 
 
 async def _open_triggers(pool, engine: str) -> list[dict]:
-    """Unresolved forensics_triggers for ``engine`` (resolved_at NULL),
-    newest first. Read-only; DA-2 never writes forensics_triggers."""
+    """Unresolved forensics triggers for ``engine`` (open = notes.resolved_at
+    NULL), newest first. Read-only; DA-2 never writes triggers.
+
+    Plan 2: forensics triggers now live in ``platform.data_quality_log``
+    (``kind='forensics_trigger'``); the read goes through the shared
+    ``tpcore.forensics.dql_store.OPEN_FOR_ENGINE_SQL`` so the kind filter +
+    open predicate stay in lockstep with the producer."""
+    from tpcore.forensics.dql_store import OPEN_FOR_ENGINE_SQL
+
     async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT id, trigger_kind, payload
-            FROM platform.forensics_triggers
-            WHERE resolved_at IS NULL
-              AND payload->>'engine' = $1
-            ORDER BY fired_at DESC
-            """,
-            engine,
-        )
+        rows = await conn.fetch(OPEN_FOR_ENGINE_SQL, engine)
     out: list[dict] = []
     for r in rows:
         payload = r["payload"]

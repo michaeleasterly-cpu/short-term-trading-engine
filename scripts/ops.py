@@ -79,9 +79,10 @@ HEAVY_STAGE_TIMEOUT_SEC = 3600.0  # 60 minutes (1200s was still tripping on ~7,3
 # silently masking a real hang. Only affects the sec_filings stage;
 # every other stage stays on HEAVY_STAGE_TIMEOUT_SEC.
 SEC_FILINGS_STAGE_TIMEOUT_SEC = 21600.0  # 6 hours
-# Marker written into every canary-injected forensics_triggers row and used
-# by the teardown DELETE predicate.  Single constant keeps the 4 sites in sync
-# so a divergence can never make teardown silently fail to clean injected rows.
+# Marker written into every canary-injected forensics-trigger row (Plan 2:
+# data_quality_log kind='forensics_trigger', notes->>'source') and used by the
+# teardown DELETE predicate. Single constant keeps the sites in sync so a
+# divergence can never make teardown silently fail to clean injected rows.
 _CANARY_INJECTION_SOURCE = "canary_injection"
 
 # Canonical INSERT for the symbol-history-evidence forensic rows into the
@@ -11126,9 +11127,10 @@ async def _stage_forensics(pool: asyncpg.Pool) -> dict[str, Any]:
 
     Detects drawdown periods, loss clusters, and outlier losses across
     every engine's AAR history, inserts new triggers into
-    ``platform.forensics_triggers``, and writes Sprint Dossier markdown
-    files under ``docs/sprints/`` (fingerprinted, so re-running is a
-    no-op). Read-side stage — does not modify any data-update table.
+    ``platform.data_quality_log`` (``kind='forensics_trigger'``; Plan 2
+    consolidation), and writes Sprint Dossier markdown files under
+    ``docs/sprints/`` (fingerprinted, so re-running is a no-op). Read-side
+    stage — does not modify any data-update table.
 
     Lives as the final stage of ``--update`` so a single ``ops.py
     --update`` produces both fresh data AND a refreshed dossier set.
@@ -11145,18 +11147,21 @@ async def _stage_forensics(pool: asyncpg.Pool) -> dict[str, Any]:
 async def _stage_canary_inject_trigger(
     pool: asyncpg.Pool, config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Inject ONE well-formed forensics_triggers row for engine='canary'
-    ONLY (DA-2 end-to-end harness). Payload mirrors the forensics
-    producer's shape per kind + a source='canary_injection' marker for
-    audit/teardown. ``--param teardown=true`` removes all injected rows.
-    NEVER writes for any engine other than canary.
+    """Inject ONE well-formed forensics-trigger row for engine='canary'
+    ONLY (DA-2 end-to-end harness; Plan 2: data_quality_log
+    kind='forensics_trigger'). Payload mirrors the forensics producer's shape
+    per kind + a source='canary_injection' marker for audit/teardown.
+    ``--param teardown=true`` removes all injected rows. NEVER writes for any
+    engine other than canary.
 
     Supported kinds: ``outlier_loss``, ``loss_cluster``, ``drawdown_period``.
     Default kind is ``loss_cluster``.
     """
-    import json as _json
     from datetime import UTC
     from datetime import datetime as _dt
+
+    from tpcore.forensics import dql_store
+    from tpcore.quality.data_quality import KIND_FORENSICS_TRIGGER
 
     cfg = config or {}
     if cfg.get("engine", "canary") != "canary":
@@ -11164,11 +11169,13 @@ async def _stage_canary_inject_trigger(
             "canary_inject_trigger writes for engine='canary' ONLY — "
             "pass engine='canary' or omit the param entirely")
     if cfg.get("teardown"):
+        # Plan 2: injected rows live in data_quality_log
+        # (kind='forensics_trigger'); the canary marker is notes->>'source'.
         async with pool.acquire() as conn:
             await conn.execute(
-                "DELETE FROM platform.forensics_triggers "
-                "WHERE payload->>'source' = $1",
-                _CANARY_INJECTION_SOURCE)
+                "DELETE FROM platform.data_quality_log "
+                "WHERE kind = $1 AND notes->>'source' = $2",
+                KIND_FORENSICS_TRIGGER, _CANARY_INJECTION_SOURCE)
         return {"teardown": True}
 
     kind = str(cfg.get("kind", "loss_cluster"))
@@ -11216,15 +11223,16 @@ async def _stage_canary_inject_trigger(
             "source": _CANARY_INJECTION_SOURCE,
         }
     async with pool.acquire() as conn:
-        exists = await conn.fetchrow(
-            "SELECT 1 FROM platform.forensics_triggers WHERE "
-            "trigger_kind=$1 AND payload->>'fingerprint'=$2 LIMIT 1",
-            kind, fp)
-        if exists is None:
-            await conn.execute(
-                "INSERT INTO platform.forensics_triggers "
-                "(trigger_kind, payload, fired_at) VALUES ($1,$2::jsonb,$3)",
-                kind, _json.dumps(payload), now)
+        if not await dql_store.fingerprint_exists(
+            conn, trigger_kind=kind, fingerprint=fp
+        ):
+            await dql_store.insert_trigger(
+                conn,
+                trigger_kind=kind,
+                engine="canary",
+                payload=payload,
+                fired_at=now,
+            )
     return {"injected": kind, "fingerprint": fp, "engine": "canary"}
 
 
@@ -15860,26 +15868,20 @@ async def _check_consolidated_daemon_topology(pool: asyncpg.Pool) -> dict[str, A
 async def _check_forensics(pool: asyncpg.Pool) -> dict[str, Any]:
     """Surface open Sprint Dossiers from ``platform.forensics_triggers``.
 
-    "Open" = ``resolved_at IS NULL``. The probe reports total count,
-    the most recent fire timestamp, and the distinct set of engines
-    under review (each trigger's ``payload->>'engine'``). Operator
-    workflow: open the linked dossier markdown under ``docs/sprints/``,
-    diagnose, then set ``resolved_at = now()`` to close.
+    "Open" = ``notes->>'resolved_at' IS NULL`` (Plan 2: forensics triggers
+    live in ``platform.data_quality_log`` WHERE ``kind='forensics_trigger'``).
+    The probe reports total count, the most recent fire timestamp, and the
+    distinct set of engines under review (each trigger's ``notes->>'engine'``).
+    Operator workflow: open the linked dossier markdown under
+    ``docs/sprints/``, diagnose, then mark resolved to close.
 
     Returns ``ok=True`` regardless of dossier count — open dossiers
     are findings to review, not platform errors. The dashboard renders
     them in the operator-action panel rather than the red-light strip.
     """
-    rows = await pool.fetch(
-        """
-        SELECT trigger_kind,
-               payload->>'engine' AS engine_under_review,
-               fired_at
-        FROM platform.forensics_triggers
-        WHERE resolved_at IS NULL
-        ORDER BY fired_at DESC
-        """
-    )
+    from tpcore.forensics.dql_store import OPEN_DOSSIERS_SQL
+
+    rows = await pool.fetch(OPEN_DOSSIERS_SQL)
     open_count = len(rows)
     last_fired_at = rows[0]["fired_at"].isoformat() if rows else None
     engines_under_review = sorted({

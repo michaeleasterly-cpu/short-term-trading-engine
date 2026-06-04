@@ -192,11 +192,10 @@ _CANDIDATE_SQL = f"""
     ORDER BY e.recorded_at
 """
 
-_OPEN_FP_SQL = """
-    SELECT payload->>'fingerprint' AS fp
-    FROM platform.forensics_triggers
-    WHERE resolved_at IS NULL AND payload->>'fingerprint' = ANY($1::text[])
-"""
+# Plan 2: forensics triggers live in platform.data_quality_log
+# (kind='forensics_trigger'); the open-fingerprint intersection read is the
+# shared tpcore.forensics.dql_store.OPEN_FINGERPRINTS_SQL (imported at call
+# time in _escalate_only_still_open so this module stays import-light).
 
 
 def _triggers_list(raw: Any) -> list[str]:
@@ -222,8 +221,10 @@ async def _escalate_only_still_open(pool, fps: list[str]) -> bool:
     (NOT open)."""
     if not fps:
         return True  # no fps recorded → cannot auto-close; remains open
+    from tpcore.forensics.dql_store import OPEN_FINGERPRINTS_SQL
+
     async with pool.acquire() as conn:
-        fp_rows = await conn.fetch(_OPEN_FP_SQL, list(set(fps)))
+        fp_rows = await conn.fetch(OPEN_FINGERPRINTS_SQL, list(set(fps)))
     open_fp_set = {fr["fp"] for fr in fp_rows}
     return bool(set(fps) & open_fp_set)
 

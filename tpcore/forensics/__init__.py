@@ -2,8 +2,9 @@
 
 Per MASTER_PLAN §5: detects drawdown periods, loss clusters, and outlier
 losses across per-engine AAR histories. Writes triggers to
-``platform.forensics_triggers`` for operator review (a Sprint Dossier
-follow-up is operator-driven, not automated).
+``platform.data_quality_log`` (``kind='forensics_trigger'``; Plan 2
+consolidation, via ``tpcore.forensics.dql_store``) for operator review (a
+Sprint Dossier follow-up is operator-driven, not automated).
 """
 
 from tpcore.forensics.service import (
