@@ -31,6 +31,29 @@
 
 ---
 
+## Phase 0 (ADDED 2026-06-04 — discovered scope) — `data_quality_log` consolidation rewiring
+
+The db-architect authoring trace found the consolidation layer's blast radius is wider than Tasks 3–5 assumed. Operator chose to **rewire everything before the wipe**. This phase completes + is green BEFORE Tasks 3/5 apply; a `code-quality-reviewer` pass on the full diff precedes the wipe. Producer inventory + dispositions:
+
+**`data_quality_log` writers** (must emit the new shape — `kind` + jsonb `notes`, NO `ON CONFLICT (source,timestamp)`):
+- `tpcore/quality/data_quality.py` — canonical `DataQualityWriter.write` — done (shim). Add a `kind` param so non-validation callers route correctly.
+- `tpcore/audit/cross_table.py:145` — route through the canonical writer, `kind='validation'`.
+- `scripts/audit_data_pipeline.py:1407` — `kind='validation'`.
+- `scripts/ops.py:5001,5038,5101,6292` — `kind='validation'` (ingestion-metric rows → `ingest_manifest`).
+
+**Credibility kind-split (reader-coupled):** `write_credibility_score` flows through `DataQualityWriter` and sets `confidence` (a typed col); the `dql_typed_cols_validation_only` CHECK forbids typed cols on non-`validation` kinds. A true `kind='backtest_credibility'` row would have to carry `confidence` in `notes`, forcing the reader `tpcore/backtest/credibility.py:255` (`graduation_ready`) to read `notes->>'confidence'`. **Decision: keep credibility as `kind='validation'` (the CHECK-valid shim; reader unchanged) for this cutover; defer the clean split.**
+
+**Dropped-sidecar producers** (0300 drops the tables → rewire or they break at runtime):
+- `forensics_triggers` — `tpcore/forensics/{service,__init__,__main__}.py`, `ops/engine_ladder.py`, `ops/aar_autotune.py` → dql `kind='forensics_trigger'` (fingerprint/dossier in `notes`).
+- `parity_drift_log` — `tpcore/parity/harness.py` → dql `kind='parity_drift'`.
+- `ingestion_metrics` — `tpcore/ingestion/{handlers,d2_metrics}.py` → `ingest_manifest` (reconciliation counts, spec v1.3), NOT dql.
+
+**count_snapshot correction (SUPERSEDES Task 4):** `earnings_events_count_snapshot` is a STATEFUL monotone baseline (`earnings_events_monotone.py` does `SELECT … FOR UPDATE` + upsert to detect count *shrinkage*), NOT a cache. A VIEW always equals the live count → defeats the monotone invariant. **Migration `0400` is DROPPED entirely; the table STAYS a mutable baseline table; re-chain `0500.down_revision → 0300`.** Spec §2.4 updated to exempt stateful-baseline snapshots from view-demotion.
+
+Each rewired producer keeps its mock/unit tests green; the live-coupled whole-suite goes green only AFTER the Task-7 migration apply.
+
+---
+
 ### Task 1: Phase-1 snapshot — PRESERVE-class + full DB snapshot
 
 **Files:**
