@@ -15866,7 +15866,8 @@ async def _check_consolidated_daemon_topology(pool: asyncpg.Pool) -> dict[str, A
 
 
 async def _check_forensics(pool: asyncpg.Pool) -> dict[str, Any]:
-    """Surface open Sprint Dossiers from ``platform.forensics_triggers``.
+    """Surface open Sprint Dossiers from ``platform.data_quality_log``
+    (``kind='forensics_trigger'``; Plan 2 consolidation).
 
     "Open" = ``notes->>'resolved_at' IS NULL`` (Plan 2: forensics triggers
     live in ``platform.data_quality_log`` WHERE ``kind='forensics_trigger'``).

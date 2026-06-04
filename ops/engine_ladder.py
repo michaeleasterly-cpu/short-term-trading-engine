@@ -215,8 +215,9 @@ async def _escalate_only_still_open(pool, fps: list[str]) -> bool:
     (shared by list_undispositioned AND disposition so they can never
     diverge again). An escalate-only escalation is OPEN iff:
       - it recorded NO trigger fingerprints (cannot auto-close → open), OR
-      - at least one of its fingerprints is still unresolved in
-        platform.forensics_triggers.
+      - at least one of its fingerprints is still unresolved in the
+        forensics-trigger rows (Plan 2: data_quality_log
+        kind='forensics_trigger').
     If it recorded fingerprints and ALL are resolved → auto-closed
     (NOT open)."""
     if not fps:

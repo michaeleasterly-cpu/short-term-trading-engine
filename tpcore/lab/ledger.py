@@ -8,10 +8,14 @@ This module persists each Lab run's trial *spend* as one append-only
 ``lab_trial_ledger.<target>`` and derives the cumulative count by
 SUMming prior spend rows.
 
-Substrate: REUSED ``platform.data_quality_log`` (append-only, PK
-``(source, timestamp)``, ``ON CONFLICT DO NOTHING``) via the existing
+Substrate: REUSED ``platform.data_quality_log`` (append-only) via the existing
 ``DataQualityWriter``/``DataQualityScore`` — NO new table, NO migration
-(H-LL-5). The spend is recorded UNCONDITIONALLY at sample time, before
+(H-LL-5). Plan 2 reshaped the table (uuid PK + ``kind`` + jsonb ``notes``); the
+writer stamps these ledger rows ``kind='validation'`` (the shim) and the
+cumulative read keys on the disjoint ``source`` namespace, so the redesign is
+transparent here. The former ``(source, timestamp)`` UNIQUE / ``ON CONFLICT DO
+NOTHING`` idempotency is gone (uuid PK ⇒ plain INSERT); the cumulative SUM read
+is unaffected. The spend is recorded UNCONDITIONALLY at sample time, before
 any verdict/abort, so the abort-after-fishing under-count is closed
 (H-LL-1). Keyed strictly on the target engine — the coarsest honest key
 (H-LL-2). The source is disjoint from ``backtest_credibility.*`` so the
@@ -64,10 +68,10 @@ async def record_trial_spend(
     and is known at sample time. Returns the spend-row timestamp (the
     strict ``<`` boundary the cumulative read uses).
 
-    Append-only ``ON CONFLICT (source, timestamp) DO NOTHING``: a
-    pathological same-microsecond collision drops a count (fail-safe
-    toward UNDER-count only, not adversarially reachable — H-LL-8); it
-    never errors and never double-counts.
+    Append-only plain INSERT (Plan 2: the uuid PK makes every row unique, so
+    the former ``ON CONFLICT (source, timestamp) DO NOTHING`` is no longer
+    needed; same-microsecond rows now each persist rather than one being
+    dropped — the cumulative SUM read tolerates that). It never errors.
     """
     ts = datetime.now(UTC)
     notes = json.dumps(
