@@ -198,7 +198,8 @@ async def build_weekly_digest(pool: Any, now: datetime | None = None) -> WeeklyD
         pool,
         """WITH latest AS (
                SELECT source, MAX(timestamp) t FROM platform.data_quality_log
-               WHERE source LIKE 'validation.%' GROUP BY source)
+               WHERE kind = 'validation' AND source LIKE 'validation.%'
+               GROUP BY source)
            SELECT q.source, q.confidence
            FROM platform.data_quality_log q JOIN latest l
              ON l.source=q.source AND l.t=q.timestamp

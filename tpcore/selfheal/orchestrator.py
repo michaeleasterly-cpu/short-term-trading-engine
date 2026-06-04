@@ -49,7 +49,7 @@ _RED_SQL = """
     WITH latest AS (
         SELECT source, MAX(timestamp) AS t
         FROM platform.data_quality_log
-        WHERE source LIKE 'validation.%'
+        WHERE kind = 'validation' AND source LIKE 'validation.%'
         GROUP BY source
     )
     SELECT q.source

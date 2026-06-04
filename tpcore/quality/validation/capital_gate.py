@@ -232,7 +232,7 @@ async def _fetch_validation_rows(pool: asyncpg.Pool) -> list[dict]:
     sql = """
         SELECT source, timestamp, stale
         FROM platform.data_quality_log
-        WHERE source LIKE 'validation.%'
+        WHERE kind = 'validation' AND source LIKE 'validation.%'
         ORDER BY timestamp DESC
     """
     async with pool.acquire() as conn:
