@@ -125,11 +125,10 @@ class _CtxConn:
     async def fetchrow(self, sql, *params):
         s = " ".join(sql.split())
         if s.startswith("INSERT INTO platform.data_quality_log"):
-            source, ts = params[0], params[1]
-            notes = params[6]
-            if any(r["source"] == source and r["timestamp"] == ts
-                   for r in self._rows):
-                return None  # ON CONFLICT DO NOTHING
+            # Plan 2 bind order: (kind, source, timestamp, latency_ms,
+            # missing_bars, stale, confidence, notes); uuid PK ⇒ plain append.
+            source, ts = params[1], params[2]
+            notes = params[7]
             self._rows.append(
                 {"source": source, "timestamp": ts, "notes": notes})
             return {"?column?": 1}

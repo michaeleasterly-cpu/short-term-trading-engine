@@ -39,10 +39,13 @@ if "ops" in sys.modules and not hasattr(sys.modules["ops"], "__path__"):
 
 
 # ── In-memory fake pool: mirrors the append-only data_quality_log
-#    contract verbatim — INSERT … ON CONFLICT (source,timestamp) DO
-#    NOTHING RETURNING 1, plus the cumulative SUM. The real
-#    DataQualityWriter.write SQL (tpcore/quality/data_quality.py:48) is
-#    exercised against this; no socket. ──────────────────────────────
+#    contract. Plan 2 reshaped the table: the writer's INSERT now binds
+#    (kind, source, timestamp, latency_ms, missing_bars, stale, confidence,
+#    notes) with a uuid PK and NO ON CONFLICT (plain INSERT … RETURNING 1).
+#    The real write_row/DataQualityWriter.write SQL
+#    (tpcore/quality/data_quality.py) is exercised against this; no socket.
+#    The ledger keys on the disjoint `source` namespace, so the fake still
+#    keys its in-memory rows on (source, timestamp). ──────────────────────
 
 # pytest-xdist: pin this ops-shadow module to one worker so its
 # sys.modules['ops'] / scripts/ops.py loading stays single-process
@@ -57,11 +60,11 @@ class _FakeConn:
     async def fetchrow(self, sql, *params):
         s = " ".join(sql.split())
         if s.startswith("INSERT INTO platform.data_quality_log"):
-            source, ts = params[0], params[1]
-            notes = params[6]
-            if any(r["source"] == source and r["timestamp"] == ts
-                   for r in self._rows):
-                return None  # ON CONFLICT DO NOTHING
+            # Plan 2 bind order: (kind, source, timestamp, latency_ms,
+            # missing_bars, stale, confidence, notes). uuid PK ⇒ plain
+            # INSERT (no ON CONFLICT) ⇒ every row persists.
+            source, ts = params[1], params[2]
+            notes = params[7]
             self._rows.append(
                 {"source": source, "timestamp": ts, "notes": notes})
             return {"?column?": 1}
@@ -175,7 +178,7 @@ async def test_notes_payload_shape_is_frozen_schema_1():
     assert isinstance(payload["seed"], int)
 
 
-async def test_no_reset_path_monotone_and_conflict_is_dropped_not_doubled():
+async def test_no_reset_path_monotone_and_append_only():
     """MAKE-OR-BREAK · T-NORESET. The cumulative count is monotone and
     has NO reset entrypoint:
 
@@ -185,18 +188,18 @@ async def test_no_reset_path_monotone_and_conflict_is_dropped_not_doubled():
        no kwarg that reduces the SUM.
     2. The module source contains no UPDATE/DELETE SQL against
        ``data_quality_log`` and no DELETE/TRUNCATE at all.
-    3. Re-emitting the SAME (source, timestamp) is ``ON CONFLICT DO
-       NOTHING`` — no error, no double-count (the count stays equal,
-       never grows on the dup, never raises).
+    3. Each spend is a plain append (Plan 2: uuid PK ⇒ no ON CONFLICT);
+       re-emitting at the same wall-clock timestamp persists BOTH rows
+       and never raises.
 
-    H-LL-8 (accepted residual, documented HERE not silently): a
-    same-microsecond ``(source, timestamp)`` collision drops one count
-    (``ON CONFLICT DO NOTHING``). This is fail-safe toward UNDER-count
-    ONLY and is not adversarially reachable — timestamps are
-    ``datetime.now(UTC)`` per distinct run; an adversary forcing a
-    collision also drops their OWN run's count, which cannot reduce
-    their penalty below honest. Accepted; asserted no-error/no-double
-    below.
+    H-LL-8 (Plan 2 update): the redesign dropped the
+    ``UNIQUE (source, timestamp)`` (uuid PK). A pathological
+    same-microsecond collision now persists BOTH rows rather than dropping
+    one — i.e. the failure mode flipped from fail-safe-UNDER-count to a
+    (still not adversarially reachable) possible OVER-count on the exact
+    same-microsecond dup. The penalty is the multiple-testing ``n_trials``
+    SUM, so an over-count only makes the DSR penalty *stricter* (harder to
+    graduate) — conservative, never permissive. Asserted no-error below.
     """
     import tpcore.lab.ledger as ledger
     from tpcore.lab.ledger import (
@@ -228,16 +231,14 @@ async def test_no_reset_path_monotone_and_conflict_is_dropped_not_doubled():
     assert "UPDATE PLATFORM.DATA_QUALITY_LOG" not in src
     assert "DELETE FROM" not in src
     assert "TRUNCATE" not in src
-    assert "ON CONFLICT (SOURCE, TIMESTAMP) DO NOTHING" in (
-        # the contract is enforced by DataQualityWriter.write; assert the
-        # ledger relies on it (no own-rolled mutable write path).
-        inspect.getsource(
-            __import__("tpcore.quality.data_quality",
-                       fromlist=["DataQualityWriter"]).DataQualityWriter
-        ).upper()
-    )
+    # The ledger relies on DataQualityWriter.write (no own-rolled mutable
+    # write path). Plan 2: that path is a plain append-only INSERT (uuid PK).
+    # The append-only behavior (no dedup-drop on a duplicate row) is asserted
+    # behaviorally in part (3) below; the static check here only confirms the
+    # ledger itself rolls no mutable write path of its own (covered above).
 
-    # (3) duplicate (source, timestamp) → dropped, not doubled, no raise.
+    # (3) plain append: re-emitting at the same timestamp persists both
+    # rows and never raises (uuid PK, no dedup).
     pool = _FakePool()
     ts = await record_trial_spend(
         pool, target="reversion", candidate="c", trials=40, seed=0)
@@ -247,10 +248,9 @@ async def test_no_reset_path_monotone_and_conflict_is_dropped_not_doubled():
     assert cum_one == 40
     rows_before = len(pool.rows)
 
-    # Force a GENUINE same-(source, timestamp) collision through the
-    # exact write path record_trial_spend uses (DataQualityWriter.write)
-    # so the ON CONFLICT DO NOTHING branch is actually exercised:
-    # MUST NOT raise, MUST NOT append a row, MUST NOT double-count.
+    # Force a same-(source, timestamp) re-emit through the exact write path
+    # record_trial_spend uses (DataQualityWriter.write): MUST NOT raise. With
+    # the uuid PK there is no dedup, so the row IS appended (H-LL-8 flipped).
     from decimal import Decimal
 
     from tpcore.quality.data_quality import (
@@ -267,10 +267,8 @@ async def test_no_reset_path_monotone_and_conflict_is_dropped_not_doubled():
         notes=pool.rows[0]["notes"],
     )
     wrote = await DataQualityWriter(pool).write(dup)  # no exception
-    assert wrote is False  # ON CONFLICT DO NOTHING → no new row
-    assert len(pool.rows) == rows_before  # dropped, not appended
-    # no double-count: cumulative is unchanged by the dropped collision.
-    assert await cumulative_n_trials(pool, "reversion", after_first) == 40
+    assert wrote is True  # plain INSERT → row written
+    assert len(pool.rows) == rows_before + 1  # appended (no dedup)
 
     # (b) monotone: each genuine (distinct-ts) spend only ever grows the
     # cumulative — it is a SUM over an append-only log, never decreases.
