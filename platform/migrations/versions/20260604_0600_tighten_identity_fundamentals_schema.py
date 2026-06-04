@@ -22,6 +22,7 @@ Live introspection (2026-06-04, alembic head pre-apply 20260604_0500):
 """
 from __future__ import annotations
 
+import sqlalchemy as sa
 from alembic import op
 
 revision = "20260604_0600"
@@ -31,6 +32,25 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Empty-table self-protection (Plan 2 sequence guard). This migration runs
+    # AFTER the Task-7 wipe — `fundamentals_quarterly` MUST be empty. The
+    # 3-part natural PK below would fail loudly on populated data (duplicate /
+    # NULL key rows from the legacy surrogate-id era), so refuse to run rather
+    # than half-apply. Correct sequence: `alembic upgrade 20260604_0500` →
+    # wipe `platform.fundamentals_quarterly` → `alembic upgrade head`.
+    bind = op.get_bind()
+    fq_rows = bind.execute(
+        sa.text("SELECT count(*) FROM platform.fundamentals_quarterly")
+    ).scalar_one()
+    if fq_rows:
+        raise RuntimeError(
+            "20260604_0600 refuses to run: platform.fundamentals_quarterly is "
+            f"NOT empty ({fq_rows} rows). This migration adds the 3-part natural "
+            "PK (ticker, period_end_date, filing_date) on the WIPED table. "
+            "Correct sequence: `alembic upgrade 20260604_0500` -> wipe "
+            "platform.fundamentals_quarterly -> `alembic upgrade head`."
+        )
+
     op.execute(
         "ALTER TABLE platform.ticker_classifications "
         "ALTER COLUMN lifetime_start DROP DEFAULT"

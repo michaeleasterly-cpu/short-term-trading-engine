@@ -25,11 +25,15 @@ values here. failed_alpha_ledger + ingest_quarantine stay STANDALONE (v1.4).
     shim tags EVERY DataQualityWriter row kind='validation' (the only CHECK-compliant
     minimal path that keeps both suites green); the per-kind writer split is deferred
     to Plan 3/4 (plan Task 5 Step 2 caveat).
-  * OTHER raw writers still emit the OLD 7-col + ON CONFLICT shape and are NOT in
-    this PR's scope (NOT exercised by the unit validation suite): tpcore/audit/
-    cross_table.py, scripts/audit_data_pipeline.py, scripts/ops.py (4 sites). They
-    will error at runtime against the live DB after 0500 (no UNIQUE for ON CONFLICT,
-    notes now jsonb) and must be migrated before they run post-cutover. Flagged.
+  * ALL validation writers now emit the new shape (kind discriminator + jsonb
+    notes via the shared tpcore.quality.data_quality.write_row path). Phase 0
+    rewired every raw data_quality_log writer — the validation suite, credibility,
+    cross-table audit, the folded sidecars (forensics_triggers → kind=
+    'forensics_trigger'; parity_drift_log → 'parity_drift'; fundamentals_period_
+    source_evidence → 'confirmed_data_gap_evidence'), scripts/audit_data_pipeline.py,
+    and the scripts/ops.py stage sites. There are no remaining raw OLD-shape
+    (7-col + ON CONFLICT (source, timestamp)) writers; nothing will error at
+    runtime against the redesigned table after 0500.
 """
 from __future__ import annotations
 

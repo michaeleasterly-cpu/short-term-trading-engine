@@ -1457,8 +1457,8 @@ async def amain(args: argparse.Namespace) -> int:
                 if f.recommended_action and f.severity != "OK":
                     print(f"        → {f.recommended_action}")
                 sys.stdout.flush()
-            # Fire-and-await the single-row persist. Cheap (ON CONFLICT
-            # DO NOTHING); keeps the data_quality_log current as we go.
+            # Fire-and-await the single-row persist; keeps the
+            # data_quality_log current as we go.
             persist_queue.append(f)
 
         persist_queue: list[AuditFinding] = []

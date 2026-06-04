@@ -4,7 +4,15 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from tpcore.quality.data_quality import DataQualityScore, DataQualityWriter
+import pytest
+
+from tpcore.quality.data_quality import (
+    KIND_CONFIRMED_DATA_GAP_EVIDENCE,
+    KIND_PARITY_DRIFT,
+    DataQualityScore,
+    DataQualityWriter,
+    write_row,
+)
 
 # ────────────────────────────────────────────────────────────────────────────
 # Fake pool — same shape as test_aar_writer.py / test_persistent_store.py
@@ -132,3 +140,56 @@ async def test_write_passes_score_fields() -> None:
     assert True in args
     assert Decimal("0.800") in args
     assert '{"failures": [{"ticker": "AAPL"}]}' in args
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# write_row CHECK-violation guard (dql_typed_cols_validation_only)
+# ────────────────────────────────────────────────────────────────────────────
+
+
+async def test_write_row_rejects_unknown_kind() -> None:
+    """An unrecognised ``kind`` is rejected loudly before any DB call."""
+    pool = _FakePool(fetchrow_result={"?column?": 1})
+    with pytest.raises(ValueError, match="unknown data_quality_log kind"):
+        await write_row(
+            pool,
+            kind="not_a_real_kind",
+            source="x",
+            timestamp=datetime(2026, 5, 10, 6, 0, tzinfo=UTC),
+            notes=None,
+        )
+    assert pool.conn.calls == []
+
+
+async def test_write_row_rejects_typed_cols_on_non_validation_kind() -> None:
+    """A non-``validation`` kind passed a typed metric column raises ValueError
+    locally (mirrors the ``dql_typed_cols_validation_only`` DB CHECK) — failing
+    loud rather than tripping the CHECK at runtime. No DB call is made."""
+    pool = _FakePool(fetchrow_result={"?column?": 1})
+    with pytest.raises(ValueError, match="forbids typed metric columns"):
+        await write_row(
+            pool,
+            kind=KIND_PARITY_DRIFT,
+            source="parity.x",
+            timestamp=datetime(2026, 5, 10, 6, 0, tzinfo=UTC),
+            notes={"drift_bps": 3},
+            confidence=0.5,
+        )
+    assert pool.conn.calls == []
+
+
+async def test_write_row_confirmed_data_gap_evidence_with_notes_only_ok() -> None:
+    """The confirmed-data-gap kind with notes-only (no typed cols) is accepted
+    and produces exactly one INSERT under the new kind discriminator."""
+    pool = _FakePool(fetchrow_result={"?column?": 1})
+    wrote = await write_row(
+        pool,
+        kind=KIND_CONFIRMED_DATA_GAP_EVIDENCE,
+        source="confirmed_data_gap_evidence.sec_companyfacts",
+        timestamp=datetime(2026, 5, 10, 6, 0, tzinfo=UTC),
+        notes={"ticker": "AAPL", "outcome": "extract_none"},
+    )
+    assert wrote is True
+    assert len(pool.conn.calls) == 1
+    _, args = pool.conn.calls[0]
+    assert args[0] == KIND_CONFIRMED_DATA_GAP_EVIDENCE

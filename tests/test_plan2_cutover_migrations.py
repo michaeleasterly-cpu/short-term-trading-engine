@@ -123,6 +123,16 @@ def test_tighten_migration_ddl() -> None:
     assert "ADD PRIMARY KEY (ticker, period_end_date, filing_date)" in src
 
 
+def test_tighten_migration_is_empty_table_self_protecting() -> None:
+    """0600 must refuse to run on a populated fundamentals_quarterly (the
+    3-part PK would fail mid-apply on legacy data). Guards the correct
+    sequence: upgrade 0500 -> wipe -> upgrade head."""
+    src = TIGHTEN_MIG.read_text()
+    assert "SELECT count(*) FROM platform.fundamentals_quarterly" in src
+    assert "raise RuntimeError" in src
+    assert "op.get_bind()" in src
+
+
 # ── Cross-cutting: the revision chain is a single line 0200..0600 ─────────────
 
 
