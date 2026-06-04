@@ -501,8 +501,9 @@ def test_no_validator_threshold_change_source_sentinel() -> None:
 #
 # Per spec PR #450 + plan PR #451 §7.1: the SEC handler accumulates
 # evidence rows alongside archive rows. In live mode the rows are
-# UPSERTed into ``platform.fundamentals_period_source_evidence``; in
-# dry_run mode they are NOT written.
+# written into ``platform.data_quality_log``
+# (kind='confirmed_data_gap_evidence', Plan 2); in dry_run mode they
+# are NOT written.
 
 
 async def test_dry_run_true_does_not_upsert_evidence() -> None:

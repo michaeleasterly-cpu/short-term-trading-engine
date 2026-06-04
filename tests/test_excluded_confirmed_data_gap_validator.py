@@ -53,29 +53,27 @@ def _make_pool(
     *,
     filing_rows: list[dict],
     evidence_rows_by_ticker: dict[str, list[dict]] | None = None,
-    evidence_table_present: bool = True,
 ) -> MagicMock:
     """Build an asyncpg-pool stub.
 
     First fetch: the universe SQL (matches by substring of
     ``platform.liquidity_tiers``).
-    Subsequent fetches against the evidence table return rows
-    keyed by ticker.
-    fetchval for ``to_regclass`` returns ``evidence_table_present``.
+    Subsequent fetches against the confirmed-data-gap evidence (Plan 2:
+    ``platform.data_quality_log`` with ``kind='confirmed_data_gap_evidence'``)
+    return rows keyed by ticker. The old ``to_regclass`` existence probe is gone
+    — the dql table always exists, so the evidence join always runs.
     """
     evidence_by_t = evidence_rows_by_ticker or {}
 
     async def _fetch(sql: str, *args: Any) -> list[dict[str, Any]]:
         if "FROM platform.liquidity_tiers lt" in sql:
             return filing_rows
-        if "FROM platform.fundamentals_period_source_evidence" in sql:
+        if "confirmed_data_gap_evidence" in sql:
             ticker = args[0]
             return evidence_by_t.get(ticker, [])
         return []
 
     async def _fetchval(sql: str, *args: Any) -> Any:
-        if "to_regclass" in sql:
-            return evidence_table_present
         return None
 
     conn = MagicMock()
@@ -275,15 +273,17 @@ async def test_aeva_shape_sec_yielded_does_not_exclude() -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Test 6 — Table-missing graceful skip
+# Test 6 — Evidence join always runs (no existence gate)
 # ──────────────────────────────────────────────────────────────────────
 
 
-async def test_evidence_table_missing_skips_join_gracefully() -> None:
-    """Per plan §14: if the evidence table doesn't exist
-    (post-rollback), the validator's evidence-join is bypassed
-    entirely. The bucket's narrow semantic (< 2 filings + past
-    grace) continues to fire as today."""
+async def test_evidence_join_always_runs_no_existence_probe() -> None:
+    """Plan 2: the standalone evidence table was dropped (migration 0300) and
+    evidence now lives in the always-present ``platform.data_quality_log``
+    (kind='confirmed_data_gap_evidence'). The old ``to_regclass`` existence
+    probe is gone — the evidence join unconditionally runs. When evidence is
+    present for an inferred gap, that period is excluded (decremented from the
+    ticker's gap list); the evidenced sub-counter increments."""
     today = _today()
     pool = _make_pool(
         filing_rows=_quarterly_filings(
@@ -294,16 +294,17 @@ async def test_evidence_table_missing_skips_join_gracefully() -> None:
         evidence_rows_by_ticker={
             "DDD": [
                 {"period_end_date": today - timedelta(days=200)},
+                {"period_end_date": today - timedelta(days=300)},
+                {"period_end_date": today - timedelta(days=400)},
             ],
         },
-        evidence_table_present=False,  # post-rollback path
     )
     ev = await _evaluate(pool)
-    assert ev.excluded_confirmed_data_gap_evidenced == 0, (
-        "evidenced sub-counter must remain zero when table is absent"
+    assert ev.excluded_confirmed_data_gap_evidenced >= 1, (
+        "evidence join must run unconditionally and exclude evidenced periods"
     )
-    # DDD's gaps must still be reported.
-    assert "DDD" in ev.gaps
+    # The fetchval existence probe is no longer called.
+    pool.acquire.return_value.__aenter__.return_value.fetchval.assert_not_called()
 
 
 # ──────────────────────────────────────────────────────────────────────

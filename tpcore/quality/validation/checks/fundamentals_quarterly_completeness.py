@@ -97,6 +97,9 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from tpcore.quality.confirmed_data_gap_store import (
+    EVIDENCE_JOIN_SQL as _CONFIRMED_DATA_GAP_EVIDENCE_JOIN_SQL,
+)
 from tpcore.quality.validation.models import CheckResult, FailureDetail
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -198,29 +201,15 @@ CONFIRMED_DATA_GAP_FRESHNESS_DAYS = 180
 # `ticker_quality_overrides` or similar substrate.
 ARDT_WATCHLIST: frozenset[str] = frozenset({"ARDT"})
 
-# Evidence-join SQL — kept module-level so the byte-freeze sentinel
-# can pin it. Mirrors the plan §8 specification exactly:
-#   * `to_regclass` existence-gated by the caller before the join.
-#   * Freshness gate at 180 days (`CONFIRMED_DATA_GAP_FRESHNESS_DAYS`).
-#   * Dual-source requirement: at least one `fmp_*` row + at least one
-#     `sec_companyfacts` row, BOTH `outcome IN ('empty', 'extract_none')`.
-#   * Hard reject if either leg's row in the freshness window carries
-#     `outcome='fetch_failure'` (spec §4 rule #4).
-_EVIDENCE_JOIN_SQL = (
-    """
-    SELECT period_end_date
-    FROM platform.fundamentals_period_source_evidence
-    WHERE ticker = $1
-      AND period_end_date = ANY($2::date[])
-      AND attempted_at >= NOW() - ($3::int * INTERVAL '1 day')
-    GROUP BY period_end_date
-    HAVING bool_or(source IN ('fmp_historical', 'fmp_refresh')
-                   AND outcome IN ('empty', 'extract_none'))
-       AND bool_or(source = 'sec_companyfacts'
-                   AND outcome IN ('empty', 'extract_none'))
-       AND NOT bool_or(outcome = 'fetch_failure')
-    """
-)
+# Evidence-join SQL — Plan 2 reads confirmed-data-gap evidence from
+# `platform.data_quality_log` (kind='confirmed_data_gap_evidence'); the standalone
+# `fundamentals_period_source_evidence` table was dropped in migration 0300. The
+# join SQL is the single shared fragment in
+# `tpcore.quality.confirmed_data_gap_store.EVIDENCE_JOIN_SQL`, which preserves the
+# plan §8 dual-source EXCLUSION semantics EXACTLY (freshness gate at 180 days via
+# `CONFIRMED_DATA_GAP_FRESHNESS_DAYS`; ≥1 `fmp_*` + ≥1 `sec_companyfacts` leg both
+# `empty`/`extract_none`; hard-reject the period if any leg is `fetch_failure`).
+_EVIDENCE_JOIN_SQL = _CONFIRMED_DATA_GAP_EVIDENCE_JOIN_SQL
 
 
 _FILING_DATES_SQL = """
@@ -329,23 +318,12 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
 
     async with pool.acquire() as conn:
         rows = await conn.fetch(_FILING_DATES_SQL, TRADEABLE_TIER_MAX)
-        # `to_regclass` existence check (per plan §14). Cached once
-        # per evaluator run. When the new evidence substrate doesn't
-        # exist (post-rollback or pre-migration), the evidence join
-        # is skipped entirely and the bucket's narrow semantic
-        # (< 2 filings + past grace) continues to fire as today.
-        #
-        # Defensive: hermetic-test pools that pre-date the evidence
-        # extension may not have ``fetchval`` configured. Any failure
-        # of the probe is treated as "table absent" — equivalent to
-        # the post-rollback case and the safest default.
-        try:
-            evidence_table_present = bool(await conn.fetchval(
-                "SELECT to_regclass("
-                "'platform.fundamentals_period_source_evidence') IS NOT NULL"
-            ))
-        except Exception:  # noqa: BLE001 — defensive probe
-            evidence_table_present = False
+        # Plan 2: confirmed-data-gap evidence now lives in
+        # `platform.data_quality_log` (kind='confirmed_data_gap_evidence');
+        # the standalone `fundamentals_period_source_evidence` table was
+        # dropped in migration 0300. The dql table is a permanent fixture, so
+        # the old `to_regclass` existence probe is gone — the evidence join
+        # always runs.
 
     if not rows:
         return _Evaluation(
@@ -488,17 +466,16 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
         # un-evidenced periods stay in the ticker's gap list →
         # ticker FAILs on those. The freshness gate (180 days) +
         # fetch_failure rejection are enforced inside the SQL.
-        if evidence_table_present:
-            async with pool.acquire() as conn:
-                ev_rows = await conn.fetch(
-                    _EVIDENCE_JOIN_SQL, ticker, sorted(ticker_gaps),
-                    CONFIRMED_DATA_GAP_FRESHNESS_DAYS,
-                )
-            evidenced = {r["period_end_date"] for r in ev_rows}
-            if evidenced:
-                excluded_confirmed_data_gap_evidenced += len(evidenced)
-                excluded_confirmed_data_gap += len(evidenced)
-                ticker_gaps = [d for d in ticker_gaps if d not in evidenced]
+        async with pool.acquire() as conn:
+            ev_rows = await conn.fetch(
+                _EVIDENCE_JOIN_SQL, ticker, sorted(ticker_gaps),
+                CONFIRMED_DATA_GAP_FRESHNESS_DAYS,
+            )
+        evidenced = {r["period_end_date"] for r in ev_rows}
+        if evidenced:
+            excluded_confirmed_data_gap_evidenced += len(evidenced)
+            excluded_confirmed_data_gap += len(evidenced)
+            ticker_gaps = [d for d in ticker_gaps if d not in evidenced]
 
         if ticker_gaps:
             gaps[ticker] = (sorted(ticker_gaps), primary)

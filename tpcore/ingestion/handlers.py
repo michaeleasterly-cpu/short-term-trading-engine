@@ -625,48 +625,20 @@ async def _upsert_fundamentals_period_source_evidence(
     rows: list[tuple[str, Any, str, str, str | None]],
     attempted_at: datetime,
 ) -> int:
-    """Idempotent UPSERT into ``platform.fundamentals_period_source_evidence``.
+    """Write confirmed-data-gap evidence rows into ``data_quality_log``.
 
-    Rows shape: ``(ticker, period_end_date, source, outcome, notes)``.
-    Per the `excluded_confirmed_data_gap` spec PR #450 + plan PR #451
-    §5.3, the ON CONFLICT clause is ``DO UPDATE SET outcome=EXCLUDED.outcome,
-    attempted_at=EXCLUDED.attempted_at, notes=EXCLUDED.notes`` so the
-    latest attempt always wins.
-
-    Skips silently if the table doesn't exist (post-rollback case —
-    plan §14). The validator's evidence-join is similarly gated on
-    ``to_regclass`` so the rollback path is symmetric.
-
-    Returns the number of rows written. A no-op when ``rows`` is empty.
+    Rows shape: ``(ticker, period_end_date, evidence_source, outcome, detail)``.
+    Plan 2 (migration 20260604_0300 dropped
+    ``platform.fundamentals_period_source_evidence``; 0500 folded it into
+    ``data_quality_log`` via ``kind='confirmed_data_gap_evidence'``). Routes
+    through the shared :func:`tpcore.quality.confirmed_data_gap_store.write_evidence_rows`
+    so the ``kind`` filter + notes field names stay in lockstep with the
+    completeness-check reader. Returns the number of rows written; a no-op when
+    ``rows`` is empty.
     """
-    if not rows:
-        return 0
-    async with pool.acquire() as conn:
-        exists = await conn.fetchval(
-            "SELECT to_regclass('platform.fundamentals_period_source_evidence') IS NOT NULL"
-        )
-        if not exists:
-            logger.info(
-                "ingestion.handler.fundamentals_period_source_evidence.absent",
-                pending=len(rows),
-            )
-            return 0
-        await conn.executemany(
-            """
-            INSERT INTO platform.fundamentals_period_source_evidence
-                (ticker, period_end_date, source, outcome, attempted_at, notes)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (ticker, period_end_date, source) DO UPDATE
-                SET outcome = EXCLUDED.outcome,
-                    attempted_at = EXCLUDED.attempted_at,
-                    notes = EXCLUDED.notes
-            """,
-            [
-                (t, pe, src, oc, attempted_at, notes)
-                for (t, pe, src, oc, notes) in rows
-            ],
-        )
-    return len(rows)
+    from tpcore.quality.confirmed_data_gap_store import write_evidence_rows
+
+    return await write_evidence_rows(pool, rows, attempted_at)
 
 
 def _sec_archive_rows_to_payload(rows: list[dict]) -> dict:

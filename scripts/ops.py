@@ -1092,8 +1092,13 @@ async def _stage_sec_fundamentals_fallback(pool: asyncpg.Pool, config: dict[str,
 async def _stage_confirmed_data_gap_evidence_populator(
     pool: asyncpg.Pool, config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Populate `platform.fundamentals_period_source_evidence` for
-    currently-FAILing `(ticker, period_end_date)` tuples.
+    """Populate confirmed-data-gap evidence (data_quality_log
+    `kind='confirmed_data_gap_evidence'`) for currently-FAILing
+    `(ticker, period_end_date)` tuples.
+
+    Plan 2: evidence rows fold into `platform.data_quality_log` under the
+    `confirmed_data_gap_evidence` kind discriminator (the standalone
+    `fundamentals_period_source_evidence` table was dropped in migration 0300).
 
     Implements the `confirmed_data_gap_evidence_populator` stage per
     `docs/superpowers/specs/2026-06-02-excluded-confirmed-data-gap-validator-semantics.md`
@@ -1344,31 +1349,28 @@ async def _stage_confirmed_data_gap_evidence_populator(
         # 2d. Read SEC evidence rows back from the substrate (live)
         #     OR from the handler's per-ticker counters (dry-run) so
         #     the manifest's `sec_outcome` column reflects reality.
-        async with pool.acquire() as conn:
-            evidence_present = bool(await conn.fetchval(
-                "SELECT to_regclass("
-                "'platform.fundamentals_period_source_evidence') IS NOT NULL"
-            ))
-            sec_outcomes: dict[tuple[str, date], str] = {}
-            if evidence_present and not dry_run:
+        #     Plan 2: evidence lives in data_quality_log
+        #     (kind='confirmed_data_gap_evidence') — the old
+        #     fundamentals_period_source_evidence table was dropped in
+        #     migration 0300; the dql table always exists, so no
+        #     existence probe is needed.
+        from tpcore.quality.confirmed_data_gap_store import SEC_OUTCOMES_SQL
+
+        sec_outcomes: dict[tuple[str, date], str] = {}
+        if not dry_run:
+            async with pool.acquire() as conn:
                 ev_rows = await conn.fetch(
-                    """
-                    SELECT ticker, period_end_date, outcome
-                    FROM platform.fundamentals_period_source_evidence
-                    WHERE source = 'sec_companyfacts'
-                      AND ticker = ANY($1::text[])
-                      AND period_end_date = ANY($2::date[])
-                    """,
+                    SEC_OUTCOMES_SQL,
                     list(per_ticker_periods.keys()),
                     sorted({
                         pe for periods in per_ticker_periods.values()
                         for pe in periods
                     }),
                 )
-                for r in ev_rows:
-                    sec_outcomes[(r["ticker"], r["period_end_date"])] = (
-                        r["outcome"]
-                    )
+            for r in ev_rows:
+                sec_outcomes[(r["ticker"], r["period_end_date"])] = (
+                    r["outcome"]
+                )
 
         # 2e. Roll up per-ticker outcomes for the manifest.
         for symbol, periods in per_ticker_periods.items():

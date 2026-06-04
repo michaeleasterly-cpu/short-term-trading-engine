@@ -48,7 +48,6 @@ def _make_pool(
     *,
     filing_rows: list[dict] | None = None,
     fq_rows_by_ticker: dict[str, list[date]] | None = None,
-    evidence_present: bool = True,
     sec_evidence_rows: list[dict] | None = None,
 ) -> MagicMock:
     filing_rows = filing_rows or []
@@ -67,14 +66,15 @@ def _make_pool(
             return [{"period_end_date": pe} for pe in fq_by_t.get(t, [])]
         if "FROM platform.fundamentals_quarterly fq" in sql:
             return []
-        if "FROM platform.fundamentals_period_source_evidence" in sql:
+        # Plan 2: SEC evidence read-back now hits data_quality_log
+        # (kind='confirmed_data_gap_evidence'); the standalone evidence table
+        # was dropped in migration 0300.
+        if "confirmed_data_gap_evidence" in sql:
             return sec_ev
         return []
 
     async def _fetchval(sql: str, *args: Any) -> Any:
         fetchval_calls.append((sql, args))
-        if "to_regclass" in sql:
-            return evidence_present
         return None
 
     async def _executemany(sql: str, rows: list[Any]) -> None:

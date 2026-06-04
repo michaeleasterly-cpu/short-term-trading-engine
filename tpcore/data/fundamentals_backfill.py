@@ -337,17 +337,21 @@ async def _record_fmp_evidence(
         ticker's current period_ends → ``yielded`` for periods present,
         ``empty`` for periods absent.
 
-    Skips silently if the evidence table doesn't exist (post-rollback
-    case). Idempotent UPSERT (``ON CONFLICT … DO UPDATE``); latest
-    attempt wins. Returns the number of rows written.
+    Plan 2 (migration 20260604_0300 dropped
+    ``platform.fundamentals_period_source_evidence``; 0500 folded it into
+    ``data_quality_log`` via ``kind='confirmed_data_gap_evidence'``). Routes
+    through the shared
+    :func:`tpcore.quality.confirmed_data_gap_store.write_evidence_rows`. Returns
+    the number of rows written.
     """
+    from tpcore.quality.confirmed_data_gap_store import write_evidence_rows
+
     if not requested:
         return 0
     attempted_at = datetime.now(UTC)
     if fmp_outage is not None:
         rows = [
-            (symbol, pe, source, "fetch_failure", attempted_at,
-             fmp_outage[:200])
+            (symbol, pe, source, "fetch_failure", fmp_outage[:200])
             for pe in requested
         ]
     else:
@@ -363,34 +367,11 @@ async def _record_fmp_evidence(
             (
                 symbol, pe, source,
                 "yielded" if pe in present else "empty",
-                attempted_at,
                 None,
             )
             for pe in requested
         ]
-    async with pool.acquire() as conn:
-        exists = await conn.fetchval(
-            "SELECT to_regclass('platform.fundamentals_period_source_evidence') IS NOT NULL"
-        )
-        if not exists:
-            logger.info(
-                "fundamentals_backfill.evidence_table_absent",
-                pending=len(rows), ticker=symbol,
-            )
-            return 0
-        await conn.executemany(
-            """
-            INSERT INTO platform.fundamentals_period_source_evidence
-                (ticker, period_end_date, source, outcome, attempted_at, notes)
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (ticker, period_end_date, source) DO UPDATE
-                SET outcome = EXCLUDED.outcome,
-                    attempted_at = EXCLUDED.attempted_at,
-                    notes = EXCLUDED.notes
-            """,
-            rows,
-        )
-    return len(rows)
+    return await write_evidence_rows(pool, rows, attempted_at)
 
 
 async def backfill_universe(
