@@ -66,17 +66,13 @@ def _fn_sql(suffix: str, ticker_col: str, as_of_expr: str, *, half_open: bool) -
     """Render the CREATE OR REPLACE for one trigger function.
 
     Body shape is identical to the live 20260524_1901 form; ONLY the predicate
-    differs. ``half_open=True`` emits ``<as_of> < valid_to`` (the fix);
-    ``half_open=False`` emits the closed ``valid_to`` upper-bound form (used by
-    downgrade). The closed comparator is built from a fragment so the literal
-    closed-predicate substring never appears verbatim in this migration's source
-    (the static sentinel forbids that substring as a leak of the closed form).
+    differs. ``half_open=True`` emits the fix ``<as_of> < valid_to``; the closed
+    ``half_open=False`` upper-bound is the downgrade restore path.
     """
     if half_open:
         pred = f"{as_of_expr} < valid_to"
     else:
-        closed_cmp = ">" + "= "  # split fragment: keeps the closed substring out of source
-        pred = f"valid_to {closed_cmp}{as_of_expr}"
+        pred = f"valid_to >= {as_of_expr}"
     return f"""
         CREATE OR REPLACE FUNCTION platform.{FN_NAME[suffix]}()
         RETURNS TRIGGER AS $$

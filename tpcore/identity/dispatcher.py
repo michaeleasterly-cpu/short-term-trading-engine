@@ -85,7 +85,7 @@ _CID_TO_TICKER_AS_OF = """
     FROM platform.ticker_history
     WHERE classification_id = $1
       AND valid_from <= $2
-      AND (valid_to IS NULL OR valid_to >= $2)
+      AND (valid_to IS NULL OR $2 < valid_to)
     ORDER BY valid_from DESC
     LIMIT 1
 """

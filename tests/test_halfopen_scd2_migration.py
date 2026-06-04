@@ -25,11 +25,15 @@ def test_revision_and_down_revision_pinned() -> None:
     assert "20260602_0200" in src  # down_revision pins to current HEAD
 
 
-def test_uses_half_open_predicate_not_closed() -> None:
+def test_upgrade_emits_half_open_and_downgrade_restores_closed() -> None:
     src = _src()
-    # half-open present, closed absent
-    assert "as_of < valid_to" in src or "$2 < valid_to" in src or "< valid_to" in src
-    assert "valid_to >= " not in src, "closed predicate `valid_to >= ...` must not survive in the rebuild migration"
+    # The half-open upper bound `<as_of> < valid_to` is the fix.
+    assert "< valid_to" in src, "half-open predicate `<as_of> < valid_to` missing (the fix)"
+    # The migration is table-driven via `_fn_sql(half_open=...)`: upgrade() renders the
+    # half-open form, downgrade() restores the closed form. Assert BOTH render paths
+    # exist (NOT a global ban on the closed substring — downgrade legitimately needs it).
+    assert "half_open=True" in src, "upgrade() must render the half-open form"
+    assert "half_open=False" in src, "downgrade() must restore the closed form"
 
 
 def test_covers_all_14_tables_and_not_options_max_pain() -> None:
