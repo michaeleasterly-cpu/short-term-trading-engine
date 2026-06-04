@@ -27,12 +27,22 @@ from contextlib import asynccontextmanager
 
 import pytest
 
+from tpcore.identity.tkr14 import mint
+
 pytestmark = pytest.mark.asyncio
 
 B = dt.date(2022, 6, 1)              # the seam: predecessor.valid_to == successor.valid_from == B
-PRED_CLS = "TESTPREDCLS001"          # synthetic classification ids (TKR-14-shaped, 14 chars)
-SUCC_CLS = "TESTSUCCCLS001"
-PRED_ISSUER = "TESTPREDISS001"       # one issuer per classification (for the resolver hop)
+_NOW = dt.datetime(2026, 1, 1, tzinfo=dt.UTC)
+# Real TKR-14 ids — the live `ticker_classifications.id` CHECK enforces the TKR14
+# regex, so synthetic strings are rejected. Distinct legal names -> distinct
+# issuer hashes -> distinct ids. asset_class "S" here is the TKR14 single-letter
+# code (the table column below uses the long form "stock").
+PRED_CLS = mint(country="US", asset_class="S", ipo_venue="N", discovery_source="S",
+                cik=None, legal_name="Test Predecessor Co", now=_NOW)
+SUCC_CLS = mint(country="US", asset_class="S", ipo_venue="N", discovery_source="S",
+                cik=None, legal_name="Test Successor Co", now=_NOW)
+assert PRED_CLS != SUCC_CLS, "minted classification ids must differ"
+PRED_ISSUER = "TESTPREDISS001"       # issuer_id is free text (no format CHECK)
 SUCC_ISSUER = "TESTSUCCISS001"
 TKR = "ZZTESTREUSE"
 D0 = dt.date(2020, 1, 1)
@@ -92,10 +102,19 @@ async def reuse_pair(pool):
         await tx.start()
         try:
             # Minimal classifications + the SCD-2 reuse pair in ticker_history.
+            # Two classifications for the reused ticker, shaped to satisfy the live
+            # partial uniques (tc_ticker_active_uniq: one lifetime_end-NULL row per
+            # ticker; current_ticker_active_uniq: one active current_ticker holder):
+            # the predecessor is DELISTED (lifetime_end=B, current_ticker NULL); the
+            # successor is the active current holder. asset_class must satisfy the
+            # CHECK (stock/adr/etf/...). No ON CONFLICT — a constraint surprise should
+            # fail loud, not silently drop a row.
             await c.execute(
-                "INSERT INTO platform.ticker_classifications (id, ticker, current_ticker, lifetime_start) "
-                "VALUES ($1,$2,$2,$3),($4,$5,$5,$6) ON CONFLICT DO NOTHING",
-                PRED_CLS, TKR, D0, SUCC_CLS, TKR, B,
+                "INSERT INTO platform.ticker_classifications "
+                "(id, ticker, current_ticker, lifetime_start, lifetime_end, asset_class, source) VALUES "
+                "($1, $2, NULL, $3, $4,   'stock', 'test_boundary_oracle'),"
+                "($5, $2, $2,   $4, NULL, 'stock', 'test_boundary_oracle')",
+                PRED_CLS, TKR, D0, B, SUCC_CLS,
             )
             await c.execute(
                 "INSERT INTO platform.ticker_history (ticker, classification_id, valid_from, valid_to) "
@@ -104,7 +123,9 @@ async def reuse_pair(pool):
             )
             # One issuer per classification, SCD-2-aligned, for the resolver hop.
             await c.execute(
-                "INSERT INTO platform.issuers (issuer_id) VALUES ($1),($2) ON CONFLICT DO NOTHING",
+                "INSERT INTO platform.issuers (issuer_id, legal_name) "
+                "VALUES ($1,'Test Issuer Predecessor'),($2,'Test Issuer Successor') "
+                "ON CONFLICT DO NOTHING",
                 PRED_ISSUER, SUCC_ISSUER,
             )
             await c.execute(
