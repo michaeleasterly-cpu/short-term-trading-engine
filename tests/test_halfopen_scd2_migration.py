@@ -42,3 +42,16 @@ def test_covers_all_14_tables_and_not_options_max_pain() -> None:
 def test_short_interest_as_of_is_release_date() -> None:
     src = _src()
     assert "NEW.release_date" in src, "short_interest as-of must be release_date (invariant B7)"
+
+
+FK_MIG = Path("platform/migrations/versions/20260604_0200_aar_events_classification_id_fk.py")
+
+
+def test_aar_fk_migration_pins_and_adds_fk() -> None:
+    assert FK_MIG.exists(), f"migration not found: {FK_MIG}"
+    src = FK_MIG.read_text()
+    assert "20260604_0100" in src                      # down_revision = the trigger migration
+    assert "aar_events" in src and "classification_id" in src
+    assert "REFERENCES platform.ticker_classifications" in src
+    assert "ON UPDATE CASCADE" in src and "ON DELETE RESTRICT" in src
+    assert "NOT VALID" in src and "VALIDATE CONSTRAINT" in src
