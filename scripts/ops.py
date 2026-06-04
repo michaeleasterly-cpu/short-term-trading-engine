@@ -11842,8 +11842,9 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # stage retirement closed in the same PR).
     # confirmed_data_gap_evidence_populator (2026-06-03) — heavy lane
     # one-shot operator-on-demand stage per spec PR #450 + plan
-    # PR #451. Populates platform.fundamentals_period_source_evidence
-    # for currently-FAILing (ticker, period_end_date) tuples. Default
+    # PR #451. Populates data_quality_log
+    # (kind='confirmed_data_gap_evidence', Plan 2) for currently-FAILing
+    # (ticker, period_end_date) tuples. Default
     # dry_run=true at the stage layer; live writes require the
     # operator to pass --param dry_run=false.
     ("confirmed_data_gap_evidence_populator",

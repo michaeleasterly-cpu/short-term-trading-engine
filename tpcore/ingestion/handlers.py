@@ -415,8 +415,9 @@ async def handle_sec_fundamentals_fallback(
     # alongside each ``archive_rows.append`` below). Surfaced to the
     # operator in the dry-run return dict.
     per_ticker_planned: dict[str, int] = {}
-    # Per-`(ticker, period_end_date, source)` evidence rows pending
-    # upsert to ``platform.fundamentals_period_source_evidence``. The
+    # Per-`(ticker, period_end_date, source)` evidence rows pending a
+    # write into ``platform.data_quality_log``
+    # (kind='confirmed_data_gap_evidence', Plan 2). The
     # `excluded_confirmed_data_gap` validator-semantics arc (spec PR
     # #450 + plan PR #451) requires the SEC fallback to record one row
     # per requested period — ``outcome='yielded'`` when extracted is
