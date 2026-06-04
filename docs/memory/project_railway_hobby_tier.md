@@ -20,6 +20,7 @@ metadata:
 
 **How to apply:**
 - When totalling platform costs, the fixed monthly stack is: Alpaca free + FMP Starter $22 + Railway $5 + Supabase Pro $25 = **$52/mo** (see [[supabase-pro-tier]]). Railway $5 is paid even while paused; subscription was not cancelled.
+- **FMP $200/year ≈ $17/mo**, sole data source for daily bars 2026-05-22+ (replacing Alpaca IEX/SIP as primary; Alpaca remains the broker + the fallback feed via `--param feed=iex|sip`).
 - Don't suggest building or deploying new Railway services until the user explicitly re-enables Railway. Any infra work goes into `scripts/` and runs locally for now.
 - The trade-monitor `railway.json` block is intentionally kept committed — when Railway re-enables, the deploy already has its source.
 - When advising on engine submissions or paper trading, treat the active path as: scheduler invoked locally → broker → trade_monitor (also local). No automatic cron firing.

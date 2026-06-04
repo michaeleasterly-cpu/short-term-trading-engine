@@ -47,34 +47,3 @@ NOT folded into the event-driven engine epic (A/B done, C executing,
 D pending). Relates to [[engine-sdlc-lifecycle]] (a meta-label/combiner
 would be a new lifecycle-managed component) and the DSR/credibility
 gate that is the platform's binding constraint.
-
-**⚑ Path B autonomous scale + ML-discipline preservation (operator
-decision 2026-05-21, surfaced by Task #25 Path B reversal).** The
-Task #25 Path B v1 spec
-(`docs/superpowers/specs/2026-05-21-task-25-llm-edge-finder-design.md`)
-flips the LLM edge-finder from human-gated (each PR / each ECR / each
-retire) to autonomous (auto-undraft, auto-merge, auto-ECR ADD/MODIFY/
-RETIRE, auto-retire on bleed/outcome violation). The ML-discipline-
-at-scale verdict here (n_trials inflation is the binding constraint;
-DSR deflation is the structural defense) is preserved at autonomous
-scale through THREE NEW structural fences, NOT through operator-
-gating:
-1. **Regime-aware n_trials ledger.** Same hypothesis re-fired in a
-   different market regime is a fresh trial against the regime axis;
-   `cumulative_n_trials_by_regime` deflates the DSR gate WITHIN
-   regime — defense against autonomous DSR-laundering by "novel
-   regime" hypothesis-relabeling.
-2. **Bleed-budget per finder-emitted PAPER engine.** $5,000
-   structural max-bleed over the 30-session outcome window auto-
-   retires the engine the moment it's hit — capital-destruction
-   defense at autonomous scale.
-3. **Provenance audit lane.** Every autonomous action writes a
-   `LAB_FINDER_ACTION` row; the operator audits OUTCOMES via the
-   `dashboard_components/finder_audit.py` dashboard, not each step.
-
-The defensible uses 1 (meta-labeling) and 2 (cross-engine combiner)
-remain v2.5 / v2.0 deferred in the Path B roadmap; this verdict's
-low-DOF discipline is what binds the Path B toolkit
-(`statsmodels` + `scipy.stats` only; no `arch` / `sklearn` /
-`linearmodels` in v1; HAC-default OLS removes a footgun the Path A
-spec accidentally invited).
