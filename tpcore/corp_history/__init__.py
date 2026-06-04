@@ -34,24 +34,26 @@ logger = structlog.get_logger(__name__)
 
 _RESOLVE_ISSUER_SQL = """
     -- Step 1: ticker → classification_id valid at as_of_date.
-    -- Uses ticker_history's SCD-2 timeline (valid_from <= as_of <= valid_to).
+    -- Uses ticker_history's SCD-2 timeline, half-open [valid_from, valid_to):
+    -- valid_from <= as_of AND as_of < valid_to (matches the daterange('[)')
+    -- EXCLUDE constraint; the closed `>=` upper bound double-matched the seam).
     WITH security AS (
         SELECT classification_id
         FROM platform.ticker_history
         WHERE ticker = $1
           AND valid_from <= $2
-          AND (valid_to IS NULL OR valid_to >= $2)
+          AND (valid_to IS NULL OR $2 < valid_to)
         ORDER BY valid_from DESC
         LIMIT 1
     )
     -- Step 2: classification_id → issuer_id valid at as_of_date.
-    -- Uses issuer_securities' SCD-2 timeline.
+    -- Uses issuer_securities' SCD-2 timeline (same half-open semantics).
     SELECT iss.issuer_id
     FROM security s
     JOIN platform.issuer_securities iss
       ON iss.classification_id = s.classification_id
      AND iss.valid_from <= $2
-     AND (iss.valid_to IS NULL OR iss.valid_to >= $2)
+     AND (iss.valid_to IS NULL OR $2 < iss.valid_to)
     ORDER BY iss.valid_from DESC
     LIMIT 1
 """
