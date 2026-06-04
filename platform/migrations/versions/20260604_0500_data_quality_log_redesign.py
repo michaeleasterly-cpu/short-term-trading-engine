@@ -36,7 +36,11 @@ from __future__ import annotations
 from alembic import op
 
 revision = "20260604_0500"
-down_revision = "20260604_0400"
+# Re-chained 0400→0300 (Plan 2 Phase 0): migration 0400 (count_snapshot→VIEW)
+# was DROPPED — earnings_events_count_snapshot is a STATEFUL monotone baseline
+# (earnings_events_monotone SELECT … FOR UPDATE + upsert), not a cache, so it
+# STAYS a mutable table. The chain is now 0200→0300→0500→0600.
+down_revision = "20260604_0300"
 branch_labels = None
 depends_on = None
 

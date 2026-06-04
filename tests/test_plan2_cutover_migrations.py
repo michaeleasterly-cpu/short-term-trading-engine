@@ -1,9 +1,13 @@
 """Static sentinels for the Plan 2 clean-schema cutover migrations (no live DB).
 
-Pins the revision chain 20260604_0200 -> 0300 -> 0400 -> 0500 -> 0600 and the
-exact DDL each migration must carry, so a later edit cannot silently re-shape the
+Pins the revision chain 20260604_0200 -> 0300 -> 0500 -> 0600 and the exact DDL
+each migration must carry, so a later edit cannot silently re-shape the
 destructive cutover. These are file-text assertions only — the migrations are
 applied live by the coordinator under the Task-7 gated sequence, never by CI.
+
+NOTE (Plan 2 Phase 0): migration 0400 (count_snapshot→VIEW) was DROPPED —
+``earnings_events_count_snapshot`` is a stateful monotone baseline, not a cache,
+so it STAYS a mutable table and 0500 re-chains its down_revision to 0300.
 """
 from __future__ import annotations
 
@@ -12,7 +16,6 @@ from pathlib import Path
 _VERSIONS = Path("platform/migrations/versions")
 
 DROP_MIG = _VERSIONS / "20260604_0300_drop_dead_and_folded_tables.py"
-VIEW_MIG = _VERSIONS / "20260604_0400_count_snapshot_to_view.py"
 DQL_MIG = _VERSIONS / "20260604_0500_data_quality_log_redesign.py"
 TIGHTEN_MIG = _VERSIONS / "20260604_0600_tighten_identity_fundamentals_schema.py"
 
@@ -53,19 +56,16 @@ def test_drop_migration_downgrade_is_forward_only() -> None:
     assert "raise NotImplementedError" in src
 
 
-# ── Task 4: count_snapshot -> VIEW ────────────────────────────────────────────
+# ── Task 4 REMOVED (Plan 2 Phase 0) ──────────────────────────────────────────
+# Migration 0400 (count_snapshot→VIEW) was dropped: earnings_events_count_snapshot
+# is a stateful monotone baseline (earnings_events_monotone SELECT … FOR UPDATE +
+# upsert), NOT a cache — a VIEW always equals the live count and would defeat the
+# monotone invariant. The table STAYS mutable; no migration is needed for it.
 
 
-def test_count_snapshot_becomes_view() -> None:
-    assert VIEW_MIG.exists(), f"missing {VIEW_MIG}"
-    src = VIEW_MIG.read_text()
-    assert 'revision = "20260604_0400"' in src
-    assert 'down_revision = "20260604_0300"' in src
-    assert "DROP TABLE IF EXISTS platform.earnings_events_count_snapshot" in src
-    assert "CREATE OR REPLACE VIEW platform.earnings_events_count_snapshot" in src
-    # The real columns must be reproduced so plain SELECT readers don't break.
-    assert "beat_count" in src
-    assert "snapshot_at" in src
+def test_count_snapshot_view_migration_is_gone() -> None:
+    """The 0400 view-demotion migration must NOT exist (it was dropped)."""
+    assert not (_VERSIONS / "20260604_0400_count_snapshot_to_view.py").exists()
 
 
 # ── Task 5: data_quality_log redesign ─────────────────────────────────────────
@@ -75,7 +75,7 @@ def test_dql_redesign_shape() -> None:
     assert DQL_MIG.exists(), f"missing {DQL_MIG}"
     src = DQL_MIG.read_text()
     assert 'revision = "20260604_0500"' in src
-    assert 'down_revision = "20260604_0400"' in src
+    assert 'down_revision = "20260604_0300"' in src  # re-chained: 0400 dropped
     assert "DROP TABLE IF EXISTS platform.data_quality_log CASCADE" in src
     # uuid PK
     assert "id           uuid PRIMARY KEY DEFAULT gen_random_uuid()" in src
@@ -127,10 +127,10 @@ def test_tighten_migration_ddl() -> None:
 
 
 def test_revision_chain_is_linear_and_unbroken() -> None:
+    # 0400 was dropped (Plan 2 Phase 0); the chain is 0200→0300→0500→0600.
     chain = [
         ("20260604_0300", "20260604_0200", DROP_MIG),
-        ("20260604_0400", "20260604_0300", VIEW_MIG),
-        ("20260604_0500", "20260604_0400", DQL_MIG),
+        ("20260604_0500", "20260604_0300", DQL_MIG),
         ("20260604_0600", "20260604_0500", TIGHTEN_MIG),
     ]
     for rev, down, path in chain:
