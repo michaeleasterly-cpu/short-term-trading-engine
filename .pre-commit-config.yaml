@@ -52,3 +52,16 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+
+      # Pre-PUSH test gate — runs the authoritative whole-suite gate before any
+      # push, so a push is known-clean (closes the "committed/pushed without
+      # running the gate" gap). Runs ONLY on push, not on every commit.
+      # Activate (once): pre-commit install --hook-type pre-push
+      # Bypass (emergency): STE_SKIP_PREPUSH=1 git push   (or git push --no-verify)
+      - id: pytest-prepush-gate
+        name: pytest whole-suite gate (pre-push)
+        entry: bash scripts/run_prepush_gate.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
