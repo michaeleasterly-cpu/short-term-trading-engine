@@ -56,6 +56,7 @@ Process + discipline:
 
 Git / PR / CI:
 - [Run gates LOCALLY on commit; push after major completion](feedback_run_gates_locally_on_commit.md).
+- [NEVER `git add -A`/`git add .` — sweeps untracked secrets](feedback_never_git_add_all_sweeps_secrets.md) — .env.bak incident 2026-06-05; stage explicit paths.
 - [Check CI within 60s of every push](feedback_check_ci_after_every_push.md).
 - [No mid-flight direct `gh pr checks` calls — wait for the background poll](feedback_gh_pr_checks_no_midflight_direct_calls.md) — exit 8 ≡ pending; noisy in UI; the poll loop greps text instead.
 - [Stop burning GitHub with per-task PRs](feedback_stop_burning_github_with_per_task_prs.md) — batch related work.
