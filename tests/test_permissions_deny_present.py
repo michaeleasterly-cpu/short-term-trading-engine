@@ -89,15 +89,16 @@ def test_settings_documents_why_via_comment_key() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_deny_blocks_dotenv_read_edit_write() -> None:
-    """The .env files in the project root must be denied for Read,
-    Edit, and Write — they are the only file class STE keeps secrets in
-    (per CLAUDE.md universal invariants). The ``.env.*`` glob covers
-    .env.bak, .env.local, .env.production, etc."""
+def test_deny_blocks_dotenv_edit_write() -> None:
+    """The .env files must be denied for Edit and Write (integrity: no
+    accidental clobber, no secret committed). READ is intentionally NOT
+    denied (operator directive 2026-06-05): the agent must read .env tokens
+    (Railway/Supabase/DB) to operate the cloud substrate — the CIA-triad's
+    availability leg. Confidentiality is preserved at the commit boundary
+    (.env is gitignored + gitleaks-guarded), not by blocking the agent's
+    own config reads. The ``.env.*`` glob covers .env.bak/.local/.production."""
     deny = _deny_list()
     for rule in (
-        "Read(./.env)",
-        "Read(./.env.*)",
         "Edit(./.env)",
         "Edit(./.env.*)",
         "Write(./.env)",
@@ -105,10 +106,14 @@ def test_deny_blocks_dotenv_read_edit_write() -> None:
     ):
         assert rule in deny, (
             f"settings.json permissions.deny must include {rule!r} — "
-            "STE's universal invariant is that secrets ONLY live in "
-            ".env (gitignored). Reading/writing it from a Claude "
-            "session would leak the secret into the conversation "
-            "transcript"
+            ".env must stay Edit/Write-denied so it can't be clobbered or "
+            "have a secret written into a tracked file."
+        )
+    # READ must NOT be denied (availability — operator directive 2026-06-05).
+    for rule in ("Read(./.env)", "Read(./.env.*)"):
+        assert rule not in deny, (
+            f"{rule!r} must NOT be in permissions.deny — the agent reads .env "
+            "tokens to operate the Railway/Supabase substrate (availability)."
         )
 
 

@@ -6,12 +6,10 @@
     "baseRef": "fresh",
     "bgIsolation": "worktree"
   },
-  "$comment_permissions": "deny list (controls-audit #5) — hooks can be bypassed, deny rules cannot. Sentinel: tests/test_permissions_deny_present.py.",
+  "$comment_permissions": "deny list (controls-audit #5) — hooks can be bypassed, deny rules cannot. Sentinel: tests/test_permissions_deny_present.py. NOTE (2026-06-05, operator directive): .env READ denies were REMOVED — the agent needs to read .env tokens (Railway/Supabase/DB) to operate the cloud substrate (the CIA-triad's availability leg; an agent secured out of its own config can't do the work). .env stays Edit/Write-denied (integrity: no accidental clobber/secret-commit) and remains gitignored + gitleaks-guarded on commit (confidentiality preserved at the commit boundary).",
   "permissions": {
     "defaultMode": "default",
     "deny": [
-      "Read(./.env)",
-      "Read(./.env.*)",
       "Edit(./.env)",
       "Edit(./.env.*)",
       "Write(./.env)",
