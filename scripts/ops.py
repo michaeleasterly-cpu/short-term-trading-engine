@@ -6369,13 +6369,31 @@ async def _fetch_sec_universe_entries(*, log: Any) -> list[Any]:
     await ensure_zip_cached(user_agent=user_agent)
 
     entries: list[Any] = []
+    n_untrusted_fpfd = 0
     with SECSubmissionsBulkReader() as reader:
         for ticker, entry in ticker_map.items():
             fpfd = None
             payload = reader.get_merged_submissions(entry.cik)
             if payload is not None:
-                meta = SECCompanyFactsAdapter.extract_filing_metadata(payload)
-                fpfd = meta.get("first_public_filing_date")
+                # Review #4: a merged payload with non-empty _shard_errors is
+                # MISSING shards. A missing OLDEST shard pulls min(filingDate)
+                # (FPFD) forward → look-ahead re-enters. Treat that FPFD as
+                # UNTRUSTED (None + WARN) rather than minting a confidently
+                # wrong early date; resolve_lifetime_start then falls back per
+                # its precedence (FMP earliest → now), never the sentinel.
+                if payload.get("_shard_errors"):
+                    n_untrusted_fpfd += 1
+                    log.warning(
+                        "ops.stage.universe_build.sec_fpfd_untrusted",
+                        ticker=ticker,
+                        cik=entry.cik,
+                        shard_errors=payload.get("_shard_errors"),
+                    )
+                else:
+                    meta = SECCompanyFactsAdapter.extract_filing_metadata(
+                        payload
+                    )
+                    fpfd = meta.get("first_public_filing_date")
             entries.append(
                 SECUniverseEntry(
                     ticker=ticker,
@@ -6384,19 +6402,49 @@ async def _fetch_sec_universe_entries(*, log: Any) -> list[Any]:
                     first_public_filing_date=fpfd,
                 )
             )
+        # Review #6: the SEC leg sources company_tickers.json (CURRENT filers
+        # only), so SEC-only-delisted issuers the chain cannot recover are a
+        # known survivorship residual. Make the gap OBSERVABLE rather than
+        # silent — FMP pagination (#1) recovers most delisted symbols via the
+        # FMP-only leg, but the SEC-side residual is logged explicitly here.
+        stats = reader.stats()
         log.info(
             "ops.stage.universe_build.sec_fetched",
             n_entries=len(entries),
-            **reader.stats(),
+            n_untrusted_fpfd=n_untrusted_fpfd,
+            **stats,
+        )
+        log.warning(
+            "ops.stage.universe_build.sec_survivorship_residual",
+            note=(
+                "SEC leg uses company_tickers.json (current filers only); "
+                "SEC-only-delisted issuers absent from it are a known "
+                "survivorship residual recovered mostly via the FMP-only leg "
+                "(review #6)."
+            ),
+            n_missing_from_bulk=stats.get("missing_count", 0),
+            n_shard_error_ciks=n_untrusted_fpfd,
         )
     return entries
+
+
+# FMP paginated endpoints cap each page at ~100 rows; a single-page read
+# silently truncates the delisted roster (and the stock list) and defeats
+# survivorship-freeness (G1/G3). The hard page ceiling is a runaway-guard —
+# a healthy delisted history is tens of thousands of rows (hundreds of pages),
+# never hundreds of thousands; hitting this cap is a pathology worth surfacing.
+_FMP_MAX_PAGES: int = 2_000
 
 
 async def _fetch_fmp_universe_entries(*, log: Any) -> list[Any]:
     """Fetch the FMP symbol list + delisted history → FMPUniverseEntry[].
 
-    Single bulk GET per endpoint, ``with_retry``-wrapped (never a local
-    retry loop). Delisted companies are INCLUDED so the roster is
+    PAGINATED bulk GET per endpoint (review #1): the FMP ``/stable/``
+    list endpoints return ~100 rows per page, so each is read page=0,1,…
+    until an empty page. Each individual page GET is ``with_retry``-wrapped
+    (``tpcore.outage.with_retry`` — NEVER a local retry loop). Reading only
+    the first page silently caps the delisted roster at ~100 rows and defeats
+    survivorship-freeness. Delisted companies are INCLUDED so the roster is
     survivorship-free (invariant G1/G3).
     """
     import httpx  # noqa: PLC0415
@@ -6412,15 +6460,33 @@ async def _fetch_fmp_universe_entries(*, log: Any) -> list[Any]:
         )
 
     @with_retry(max_attempts=4, backoff_base_sec=2.0, backoff_cap_sec=30.0)
-    async def _get(url: str) -> list[dict[str, Any]]:
+    async def _get_page(url: str, page: int) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.get(url, params={"apikey": api_key})
+            resp = await client.get(
+                url, params={"apikey": api_key, "page": page}
+            )
             resp.raise_for_status()
             payload = resp.json()
         return payload if isinstance(payload, list) else []
 
-    stock_rows = await _get(_FMP_STOCK_LIST_URL)
-    delisted_rows = await _get(_FMP_DELISTED_URL)
+    async def _get_all(url: str, *, what: str) -> list[dict[str, Any]]:
+        """Page through ``url`` until an empty page; each page with_retry'd."""
+        rows: list[dict[str, Any]] = []
+        for page in range(_FMP_MAX_PAGES):
+            page_rows = await _get_page(url, page)
+            if not page_rows:
+                break
+            rows.extend(page_rows)
+        else:
+            raise RuntimeError(
+                f"universe_build: FMP {what} pagination hit the "
+                f"{_FMP_MAX_PAGES}-page ceiling without an empty page — "
+                "refusing to silently truncate (review #1)."
+            )
+        return rows
+
+    stock_rows = await _get_all(_FMP_STOCK_LIST_URL, what="stock-list")
+    delisted_rows = await _get_all(_FMP_DELISTED_URL, what="delisted")
 
     delisted_by_symbol: dict[str, dict[str, Any]] = {}
     for r in delisted_rows:
@@ -6469,8 +6535,21 @@ async def _fetch_fmp_universe_entries(*, log: Any) -> list[Any]:
     return entries
 
 
-_UNIVERSE_INSERT_SQL = """
-    INSERT INTO platform.ticker_classifications
+# Cross-run idempotency (review #2): a TKR-14 ``id`` embeds the discovery
+# year (pos 5-6), so re-minting the same issuer in a LATER year yields a
+# DIFFERENT id. Keying the upsert on ``(id)`` would then either crash on the
+# ``ticker_classifications_cik_uniq`` partial index (SEC rows) or silently
+# duplicate (cik-NULL FMP-only rows). The fix is two-fold: (1) RESOLVE the
+# existing identity before minting (``_resolve_existing_identities`` reuses
+# the stored id), and (2) key the upsert on an ISSUER-STABLE conflict target,
+# NOT ``(id)``:
+#   * SEC rows (cik NOT NULL) → ``ON CONFLICT (cik) WHERE cik IS NOT NULL``
+#     (the ``ticker_classifications_cik_uniq`` partial unique index,
+#     migration 20260524_0000 §4).
+#   * FMP-only rows (cik NULL) → ``ON CONFLICT (id)`` is correct because the
+#     id is REUSED (step 1), not re-minted, so it is stable across runs; the
+#     cik partial index does not cover NULL cik, so cik cannot be the target.
+_UNIVERSE_INSERT_COLS = """
         (id, ticker, current_ticker, asset_class, source, cik,
          current_legal_name, discovery_source, lifetime_start, lifetime_end,
          status, updated_at)
@@ -6484,8 +6563,85 @@ _UNIVERSE_INSERT_SQL = """
     ) AS t(id, ticker, current_ticker, asset_class, source, cik,
            current_legal_name, discovery_source, lifetime_start, lifetime_end,
            status)
-    ON CONFLICT (id) DO NOTHING
 """
+
+# SEC leg (cik NOT NULL): issuer-stable conflict on the cik partial index.
+_UNIVERSE_INSERT_SEC_SQL = (
+    "INSERT INTO platform.ticker_classifications"
+    + _UNIVERSE_INSERT_COLS
+    + "ON CONFLICT (cik) WHERE cik IS NOT NULL DO NOTHING\n"
+)
+
+# FMP-only leg (cik NULL): id is reused (resolved before mint) → stable.
+_UNIVERSE_INSERT_FMP_SQL = (
+    "INSERT INTO platform.ticker_classifications"
+    + _UNIVERSE_INSERT_COLS
+    + "ON CONFLICT (id) DO NOTHING\n"
+)
+
+
+async def _resolve_existing_identities(
+    pool: asyncpg.Pool, rows: list[Any], *, log: Any
+) -> dict[str, str]:
+    """Resolve already-stored identity ids so a re-run REUSES them (review #2).
+
+    Returns a map keyed by ``cik`` (SEC rows) and ``current_ticker`` among
+    cik-NULL rows (FMP-only) → the existing ``id``. The caller rewrites each
+    matching ``UniverseSecurity.id`` to the stored value so a re-run in a
+    later year does NOT mint a different id for the same issuer (the TKR-14
+    discovery-year segment would otherwise change the id).
+    """
+    sec_ciks = sorted({r.cik for r in rows if r.cik})
+    fmp_tickers = sorted({r.current_ticker for r in rows if not r.cik})
+    resolved: dict[str, str] = {}
+    if sec_ciks:
+        sec_existing = await pool.fetch(
+            """
+            SELECT cik, id FROM platform.ticker_classifications
+            WHERE cik = ANY($1::text[]) AND cik IS NOT NULL AND id IS NOT NULL
+            """,
+            sec_ciks,
+        )
+        for rec in sec_existing:
+            resolved[f"cik:{rec['cik']}"] = rec["id"]
+    if fmp_tickers:
+        fmp_existing = await pool.fetch(
+            """
+            SELECT current_ticker, id FROM platform.ticker_classifications
+            WHERE current_ticker = ANY($1::text[]) AND cik IS NULL
+              AND id IS NOT NULL
+            """,
+            fmp_tickers,
+        )
+        for rec in fmp_existing:
+            resolved[f"tkr:{rec['current_ticker']}"] = rec["id"]
+    log.info(
+        "ops.stage.universe_build.identities_resolved",
+        n_sec_reused=sum(1 for k in resolved if k.startswith("cik:")),
+        n_fmp_reused=sum(1 for k in resolved if k.startswith("tkr:")),
+    )
+    return resolved
+
+
+def _apply_resolved_ids(
+    rows: list[Any], resolved: dict[str, str]
+) -> tuple[list[Any], int]:
+    """Return rows with reused ids substituted in + the reuse count.
+
+    ``UniverseSecurity`` is frozen, so a matched row is rebuilt via
+    ``model_copy(update=...)`` with the stored id (review #2 — no re-mint).
+    """
+    out: list[Any] = []
+    n_reused = 0
+    for r in rows:
+        key = f"cik:{r.cik}" if r.cik else f"tkr:{r.current_ticker}"
+        existing = resolved.get(key)
+        if existing is not None and existing != r.id:
+            out.append(r.model_copy(update={"id": existing}))
+            n_reused += 1
+        else:
+            out.append(r)
+    return out, n_reused
 
 
 async def _insert_universe_rows(
@@ -6494,34 +6650,46 @@ async def _insert_universe_rows(
     """Chunked idempotent INSERT of UniverseSecurity rows.
 
     Chunked at ``chunk_size`` (>100K-row Supabase mechanics, spec §7) to
-    avoid a single-transaction WAL blow-up. ``ON CONFLICT (id) DO NOTHING``
-    makes re-runs idempotent. ``lifetime_start`` is ALWAYS supplied (the
-    pydantic model requires it; the column is NOT NULL no-sentinel — A6).
+    avoid a single-transaction WAL blow-up. Issuer-stable conflict targets
+    (review #2) make re-runs idempotent across years: SEC rows upsert on the
+    cik partial index, FMP-only rows on the (reused) id. ``lifetime_start``
+    is ALWAYS supplied (the pydantic model requires it; the column is NOT
+    NULL no-sentinel — A6).
     """
+    sec_rows = [r for r in rows if r.cik]
+    fmp_rows = [r for r in rows if not r.cik]
     n_committed = 0
     async with pool.acquire() as conn:
-        for start in range(0, len(rows), chunk_size):
-            chunk = rows[start : start + chunk_size]
-            await conn.execute(
-                _UNIVERSE_INSERT_SQL,
-                [r.id for r in chunk],
-                [r.ticker for r in chunk],
-                [r.current_ticker for r in chunk],
-                [r.asset_class for r in chunk],
-                [r.source for r in chunk],
-                [r.cik for r in chunk],
-                [r.legal_name for r in chunk],
-                [r.discovery_source for r in chunk],
-                [r.lifetime_start for r in chunk],
-                [r.lifetime_end for r in chunk],
-                ["active" if r.lifetime_end is None else "delisted" for r in chunk],
-            )
-            n_committed += len(chunk)
-            log.info(
-                "ops.stage.universe_build.chunk_committed",
-                chunk_start=start,
-                chunk_rows=len(chunk),
-            )
+        for sql, leg_rows, leg in (
+            (_UNIVERSE_INSERT_SEC_SQL, sec_rows, "sec"),
+            (_UNIVERSE_INSERT_FMP_SQL, fmp_rows, "fmp"),
+        ):
+            for start in range(0, len(leg_rows), chunk_size):
+                chunk = leg_rows[start : start + chunk_size]
+                await conn.execute(
+                    sql,
+                    [r.id for r in chunk],
+                    [r.ticker for r in chunk],
+                    [r.current_ticker for r in chunk],
+                    [r.asset_class for r in chunk],
+                    [r.source for r in chunk],
+                    [r.cik for r in chunk],
+                    [r.legal_name for r in chunk],
+                    [r.discovery_source for r in chunk],
+                    [r.lifetime_start for r in chunk],
+                    [r.lifetime_end for r in chunk],
+                    [
+                        "active" if r.lifetime_end is None else "delisted"
+                        for r in chunk
+                    ],
+                )
+                n_committed += len(chunk)
+                log.info(
+                    "ops.stage.universe_build.chunk_committed",
+                    leg=leg,
+                    chunk_start=start,
+                    chunk_rows=len(chunk),
+                )
     return n_committed
 
 
@@ -6543,10 +6711,23 @@ async def _stage_universe_build(
     covers; FMP is the gray-zone fallback only (cik=None,
     discovery_source='F').
 
+    Cross-run idempotency (review #2): before minting, the stage RESOLVES
+    each issuer's existing identity (by cik for SEC, by ticker among cik-NULL
+    rows for FMP-only) and REUSES the stored id — a re-run in a later year
+    does NOT mint a different id (the TKR-14 discovery-year segment would
+    otherwise change it). The upsert keys on issuer-stable conflict targets
+    (cik partial index for SEC; the reused id for FMP-only), NOT ``(id)``.
+
+    Producer hard-stop (review #3): a degraded/empty-200/quota source must
+    not silently mint a TRUNCATED universe. The stage raises if the SEC
+    universe is below ``min_sec`` or the FMP stock-list below ``min_fmp``.
+
     Knobs (``--param key=value``):
       * ``dry_run`` (default True) — assemble + report counts WITHOUT any
         INSERT. ``--param dry_run=false`` for the live mint.
       * ``chunk_size`` (default 100000) — INSERT batch size.
+      * ``min_sec`` (default 8000) — hard-stop floor on the SEC universe.
+      * ``min_fmp`` (default 5000) — hard-stop floor on the FMP stock-list.
 
     This stage is NOT in the child-first ``--update`` order (it is in
     ``_OFF_CYCLE_STAGES``); it runs via the identity-first orchestrator or
@@ -6556,16 +6737,41 @@ async def _stage_universe_build(
     log = structlog.get_logger("ops.stage.universe_build")
     dry_run = _stage_param_to_bool(cfg.get("dry_run", True))
     chunk_size = int(cfg.get("chunk_size", 100_000))
+    min_sec = int(cfg.get("min_sec", 8_000))
+    min_fmp = int(cfg.get("min_fmp", 5_000))
 
     from tpcore.identity.universe_build import assemble_universe  # noqa: PLC0415
 
     sec_entries = await _fetch_sec_universe_entries(log=log)
     fmp_entries = await _fetch_fmp_universe_entries(log=log)
 
+    # Producer hard-stop on a degraded source (review #3): a quota-throttled
+    # or empty-200 fetch would otherwise silently mint a truncated universe,
+    # defeating survivorship-freeness + the identity-first substrate.
+    n_sec_fetched = len(sec_entries)
+    n_fmp_fetched = len(fmp_entries)
+    if n_sec_fetched < min_sec:
+        raise RuntimeError(
+            f"universe_build: SEC universe degraded — {n_sec_fetched} entries "
+            f"below the {min_sec} floor (empty/short 200 or quota). Refusing "
+            "to mint a truncated universe (review #3)."
+        )
+    if n_fmp_fetched < min_fmp:
+        raise RuntimeError(
+            f"universe_build: FMP stock-list degraded — {n_fmp_fetched} "
+            f"entries below the {min_fmp} floor. Refusing to mint a truncated "
+            "universe (review #3)."
+        )
+
     now = datetime.now(UTC)
     rows = assemble_universe(
         sec_entries=sec_entries, fmp_entries=fmp_entries, now=now
     )
+
+    # Reuse existing identity ids so a re-run is idempotent across years
+    # (review #2). Reads are safe in dry-run too (no write).
+    resolved = await _resolve_existing_identities(pool, rows, log=log)
+    rows, n_reused = _apply_resolved_ids(rows, resolved)
 
     n_sec = sum(1 for r in rows if r.source == "sec")
     n_fmp_only = sum(1 for r in rows if r.source == "fmp")
@@ -6588,6 +6794,7 @@ async def _stage_universe_build(
             n_sec=n_sec,
             n_fmp_only=n_fmp_only,
             n_delisted=n_delisted,
+            n_reused=n_reused,
             sample=[{"ticker": r.ticker, "id": r.id} for r in rows[:5]],
         )
         return {
@@ -6596,6 +6803,7 @@ async def _stage_universe_build(
             "n_sec": n_sec,
             "n_fmp_only": n_fmp_only,
             "n_delisted": n_delisted,
+            "n_reused": n_reused,
             "dry_run": True,
         }
 
@@ -6608,12 +6816,14 @@ async def _stage_universe_build(
         n_sec=n_sec,
         n_fmp_only=n_fmp_only,
         n_delisted=n_delisted,
+        n_reused=n_reused,
     )
     return {
         "rows_minted": n_committed,
         "n_sec": n_sec,
         "n_fmp_only": n_fmp_only,
         "n_delisted": n_delisted,
+        "n_reused": n_reused,
         "dry_run": False,
     }
 

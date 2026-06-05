@@ -157,6 +157,57 @@ def test_sec_wins_when_both_cover_ticker_fmp_does_not_duplicate() -> None:
     assert ibm.lifetime_start == date(1994, 1, 1)
 
 
+def test_bad_delisting_date_before_lifetime_start_dropped() -> None:
+    """A dirty FMP delisting_date <= lifetime_start would violate the
+    ``tc_lifetime_order`` CHECK (lifetime_end > lifetime_start) and reject the
+    whole chunk. assemble_universe must DROP the bad lifetime_end (+ WARN)
+    rather than emit a row that fails the constraint (review #5)."""
+    sec = [
+        SECUniverseEntry(
+            ticker="DIRTY", cik="0000222222", legal_name="Dirty Vendor Co",
+            first_public_filing_date=date(2010, 1, 1),
+        ),
+    ]
+    fmp = [
+        FMPUniverseEntry(
+            ticker="DIRTY", company_name="Dirty Vendor Co",
+            delisted=True, delisting_date=date(2005, 1, 1),  # BEFORE FPFD
+        ),
+    ]
+    rows = assemble_universe(sec_entries=sec, fmp_entries=fmp, now=_NOW)
+    assert len(rows) == 1
+    # lifetime_end dropped (would violate lifetime_end > lifetime_start).
+    assert rows[0].lifetime_end is None
+    assert rows[0].lifetime_start == date(2010, 1, 1)
+
+
+def test_bad_delisting_date_equal_lifetime_start_dropped() -> None:
+    """delisting_date == lifetime_start is ALSO invalid (CHECK is strict >)."""
+    fmp = [
+        FMPUniverseEntry(
+            ticker="EQ", company_name="Equal Co",
+            earliest_date=date(2018, 3, 1),
+            delisted=True, delisting_date=date(2018, 3, 1),
+        ),
+    ]
+    rows = assemble_universe(sec_entries=[], fmp_entries=fmp, now=_NOW)
+    assert len(rows) == 1
+    assert rows[0].lifetime_end is None
+
+
+def test_valid_delisting_date_after_lifetime_start_kept() -> None:
+    """A well-formed delisting_date strictly after lifetime_start is KEPT."""
+    fmp = [
+        FMPUniverseEntry(
+            ticker="GOOD", company_name="Good Co",
+            earliest_date=date(2000, 1, 1),
+            delisted=True, delisting_date=date(2012, 9, 1),
+        ),
+    ]
+    rows = assemble_universe(sec_entries=[], fmp_entries=fmp, now=_NOW)
+    assert rows[0].lifetime_end == date(2012, 9, 1)
+
+
 def test_sec_row_adopts_fmp_delisting_metadata() -> None:
     """An SEC issuer FMP marks delisted gets a lifetime_end on the
     SEC-minted row — survivorship-free without an FMP duplicate."""

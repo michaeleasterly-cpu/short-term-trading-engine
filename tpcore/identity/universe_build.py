@@ -11,6 +11,16 @@ history) and produces the survivorship-free set of
 ``UniverseSecurity`` rows, each carrying a minted TKR-14 ``id`` and an
 explicit ``lifetime_start`` (NEVER the ``1900-01-01`` sentinel).
 
+No-sentinel invariant (A6 — review #5): migration ``20260604_0600`` ALREADY
+DROPPED the ``'1900-01-01'`` column DEFAULT on live (verified), so the
+``lifetime_start`` column is ``NOT NULL`` with NO default. The invariant
+therefore rests on TWO structural facts — (a) the no-default column (a row
+inserted without an explicit ``lifetime_start`` ERRORS rather than silently
+sentineling), and (b) the in-stage refuse-to-write guard in
+``_stage_universe_build`` (raises if any assembled row carries the sentinel).
+``resolve_lifetime_start`` never emits the sentinel in the first place, so all
+three layers agree. A DB-level CHECK is optional and out of scope here.
+
 The stage handler in ``scripts/ops.py`` owns the I/O (CSV-first fetch
 with ``tpcore.outage.with_retry``, chunked INSERT) and calls these pure
 functions — mirroring the engine/data symmetry the codebase favours.
@@ -142,6 +152,35 @@ def resolve_lifetime_start(
     return now.date()
 
 
+def _guarded_lifetime_end(
+    *,
+    delisting_date: date | None,
+    lifetime_start: date,
+    ticker: str,
+) -> date | None:
+    """Return a ``lifetime_end`` only when it is strictly after
+    ``lifetime_start`` (review #5).
+
+    The ``tc_lifetime_order`` CHECK (``lifetime_end IS NULL OR lifetime_end >
+    lifetime_start``) rejects the WHOLE chunk on a single dirty vendor row.
+    A dirty FMP ``delisting_date`` that is on or before ``lifetime_start``
+    (stale/garbled vendor data) is DROPPED here (+ WARN) so one bad row can
+    never poison the batch. Dropping ``lifetime_end`` keeps the security in
+    the survivorship-free roster as still-active rather than failing the load.
+    """
+    if delisting_date is None:
+        return None
+    if delisting_date <= lifetime_start:
+        logger.warning(
+            "universe_build.bad_delisting_date_dropped",
+            ticker=ticker,
+            delisting_date=delisting_date.isoformat(),
+            lifetime_start=lifetime_start.isoformat(),
+        )
+        return None
+    return delisting_date
+
+
 def _asset_class_for(legal_name: str | None) -> AssetClass:
     """Coarse asset-class classification for the TKR-14 pos-3 segment.
 
@@ -265,7 +304,11 @@ def assemble_universe(
         # a lifetime_end. SEC Form 25 boundary is a later enrichment.
         lifetime_end: date | None = None
         if fmp_match is not None and fmp_match.delisted:
-            lifetime_end = fmp_match.delisting_date
+            lifetime_end = _guarded_lifetime_end(
+                delisting_date=fmp_match.delisting_date,
+                lifetime_start=lifetime_start,
+                ticker=ticker,
+            )
         ac = _asset_class_for(se.legal_name)
         legal_name = (se.legal_name or "").strip() or ticker
         new_id = mint_with_salt_retry(
@@ -309,7 +352,15 @@ def assemble_universe(
             fmp_earliest=fe.earliest_date,
             now=now,
         )
-        lifetime_end = fe.delisting_date if fe.delisted else None
+        lifetime_end = (
+            _guarded_lifetime_end(
+                delisting_date=fe.delisting_date,
+                lifetime_start=lifetime_start,
+                ticker=ticker,
+            )
+            if fe.delisted
+            else None
+        )
         ac = _asset_class_for(fe.company_name)
         legal_name = (fe.company_name or "").strip() or ticker
         new_id = mint_with_salt_retry(
