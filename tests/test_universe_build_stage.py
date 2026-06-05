@@ -380,28 +380,37 @@ async def test_healthy_sources_clear_floor(
 
 
 @pytest.mark.asyncio
-async def test_fmp_fetch_paginates_delisted(
+async def test_fmp_fetch_paginates_delisted_but_not_stock_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``_fetch_fmp_universe_entries`` must paginate the delisted endpoint
-    until an empty page — a single-page read silently caps delisted rows at
-    ~100 and defeats survivorship-freeness (review #1)."""
+    until an empty page (a single-page read silently caps delisted rows at
+    ~100 and defeats survivorship-freeness — review #1) but must fetch the
+    stock-list with a SINGLE GET. ``/stable/stock-list`` is NOT paginated:
+    it returns the full roster in one response and IGNORES the ``page`` param
+    (verified against the live API 2026-06-05), so paging it would loop on the
+    same full list until the page ceiling raises."""
     import httpx
 
     from scripts import ops
 
-    # 3 non-empty pages then empty, per endpoint. stock-list returns a
-    # single big page (or paginated too); delisted is the focus here.
-    def _page_rows(prefix: str, page: int) -> list[dict[str, Any]]:
+    # delisted: 3 non-empty pages then empty (paginated).
+    def _delisted_page(page: int) -> list[dict[str, Any]]:
         if page >= 3:
             return []
         return [
-            {"symbol": f"{prefix}{page}_{i}", "companyName": f"{prefix} {i}",
+            {"symbol": f"DEL{page}_{i}", "companyName": f"DEL {i}",
              "delistedDate": "2010-06-01"}
             for i in range(100)
         ]
 
-    captured_pages: dict[str, list[int]] = {"stock": [], "delisted": []}
+    # stock-list: full roster returned EVERY call regardless of page (the
+    # endpoint ignores ``page``) — faithful to the live API behaviour.
+    _STOCK_FULL = [
+        {"symbol": f"STK{i}", "companyName": f"STK {i}"} for i in range(250)
+    ]
+
+    captured_pages: dict[str, list[int | None]] = {"stock": [], "delisted": []}
 
     class _Resp:
         def __init__(self, data: list[dict[str, Any]]) -> None:
@@ -424,12 +433,12 @@ async def test_fmp_fetch_paginates_delisted(
             return None
 
         async def get(self, url: str, params: dict[str, Any]) -> _Resp:
-            page = int(params.get("page", 0))
+            page = params.get("page")
             if "delisted" in url:
                 captured_pages["delisted"].append(page)
-                return _Resp(_page_rows("DEL", page))
+                return _Resp(_delisted_page(int(page or 0)))
             captured_pages["stock"].append(page)
-            return _Resp(_page_rows("STK", page))
+            return _Resp(_STOCK_FULL)
 
     monkeypatch.setattr(httpx, "AsyncClient", _Client)
 
@@ -441,13 +450,18 @@ async def test_fmp_fetch_paginates_delisted(
             return None
 
     entries = await ops._fetch_fmp_universe_entries(log=_Log())  # noqa: SLF001
-    # Pages 0,1,2 fetched then page 3 (empty) stops the loop — for BOTH
-    # paginated endpoints.
+    # delisted: pages 0,1,2 fetched then page 3 (empty) stops the loop.
     assert captured_pages["delisted"] == [0, 1, 2, 3]
-    # 3 pages × 100 rows of delisted symbols (none on the stock list) are all
-    # present — survivorship-free, not capped at one page.
+    # stock-list: fetched EXACTLY ONCE, with NO page param (single GET — would
+    # otherwise loop to the _FMP_MAX_PAGES ceiling and raise).
+    assert captured_pages["stock"] == [None]
+    # 3 pages × 100 rows of delisted symbols are all present — survivorship-
+    # free, not capped at one page.
     delisted = [e for e in entries if e.delisted]
     assert len(delisted) >= 300
+    # the full stock roster (250) is present as live (non-delisted) entries.
+    live = [e for e in entries if not e.delisted]
+    assert len(live) >= 250
 
 
 # ── SEC shard-error → untrusted FPFD (review #4) ─────────────────────

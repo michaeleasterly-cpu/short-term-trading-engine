@@ -132,13 +132,20 @@ _ISSUER_HISTORY_OVERLAP_SQL = """
        && daterange(ih2.valid_from, COALESCE(ih2.valid_to, 'infinity'::date), '[)')
 """
 
-# (5) Every cik-bearing classification must have an issuers row. The cik-join
-# is zfill-10-normalized on BOTH sides: the FMP-fallback writer
+# (5) Every cik-bearing STOCK/REIT classification must have an issuers row.
+# The issuer satellite (CIK→issuer, FPFD, SCD-2) is an OPERATING-EQUITY model
+# only (spec-delta 2026-06-05 decisions 1+7): ETFs/funds/SPACs/ADRs may carry
+# a CIK as a provenance attribute (often a fund-trust CIK) but are NOT
+# operating issuers, so they legitimately have no issuers row. Without the
+# ``asset_class IN ('stock','reit')`` guard this probe reports every
+# CIK-backed ETF (~2,632) as a false orphan and blocks a consistent substrate.
+# The cik-join is zfill-10-normalized on BOTH sides: the FMP-fallback writer
 # (scripts/ops.py, cik_source = 'fmp') may land an UNPADDED tc.cik, so a raw
 # text compare would report a false orphan of a CONSISTENT substrate.
 _CLASSIFICATION_WITHOUT_ISSUER_SQL = """
     SELECT count(*) FROM platform.ticker_classifications tc
     WHERE tc.cik IS NOT NULL
+      AND tc.asset_class IN ('stock', 'reit')
       AND NOT EXISTS (
         SELECT 1 FROM platform.issuers AS iss_exists WHERE
           lpad(regexp_replace(iss_exists.cik, '[^0-9]', '', 'g'), 10, '0')
@@ -146,10 +153,12 @@ _CLASSIFICATION_WITHOUT_ISSUER_SQL = """
       )
 """
 
-# (6) Every cik-bearing classification must have an issuer_securities link.
+# (6) Every cik-bearing STOCK/REIT classification must have an
+# issuer_securities link. Same operating-equity-only guard as probe 5.
 _CLASSIFICATION_WITHOUT_ISSUER_SECURITIES_SQL = """
     SELECT count(*) FROM platform.ticker_classifications tc
     WHERE tc.cik IS NOT NULL
+      AND tc.asset_class IN ('stock', 'reit')
       AND NOT EXISTS (
         SELECT 1 FROM platform.issuer_securities AS isec_link WHERE
           isec_link.classification_id = tc.id

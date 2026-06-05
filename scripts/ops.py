@@ -6439,13 +6439,21 @@ _FMP_MAX_PAGES: int = 2_000
 async def _fetch_fmp_universe_entries(*, log: Any) -> list[Any]:
     """Fetch the FMP symbol list + delisted history → FMPUniverseEntry[].
 
-    PAGINATED bulk GET per endpoint (review #1): the FMP ``/stable/``
-    list endpoints return ~100 rows per page, so each is read page=0,1,…
-    until an empty page. Each individual page GET is ``with_retry``-wrapped
-    (``tpcore.outage.with_retry`` — NEVER a local retry loop). Reading only
-    the first page silently caps the delisted roster at ~100 rows and defeats
-    survivorship-freeness. Delisted companies are INCLUDED so the roster is
-    survivorship-free (invariant G1/G3).
+    Two FMP endpoints with DIFFERENT shapes (verified against the live API
+    2026-06-05):
+
+    - ``/stable/stock-list`` is NOT paginated — it returns the full symbol
+      roster (~38k rows) in ONE response and IGNORES the ``page`` param
+      (page=0 == page=1 == no-page). It is fetched with a SINGLE GET; paging
+      it would loop forever on the same full list.
+    - ``/stable/delisted-companies`` IS paginated (~100 rows/page) and is
+      read page=0,1,… until an empty page. Reading only the first page
+      silently caps the delisted roster at ~100 rows and defeats
+      survivorship-freeness (review #1). Delisted companies are INCLUDED so
+      the roster is survivorship-free (invariant G1/G3).
+
+    Each individual GET is ``with_retry``-wrapped (``tpcore.outage.with_retry``
+    — NEVER a local retry loop).
     """
     import httpx  # noqa: PLC0415
 
@@ -6460,20 +6468,22 @@ async def _fetch_fmp_universe_entries(*, log: Any) -> list[Any]:
         )
 
     @with_retry(max_attempts=4, backoff_base_sec=2.0, backoff_cap_sec=30.0)
-    async def _get_page(url: str, page: int) -> list[dict[str, Any]]:
+    async def _get(url: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.get(
-                url, params={"apikey": api_key, "page": page}
-            )
+            resp = await client.get(url, params={"apikey": api_key, **params})
             resp.raise_for_status()
             payload = resp.json()
         return payload if isinstance(payload, list) else []
 
-    async def _get_all(url: str, *, what: str) -> list[dict[str, Any]]:
-        """Page through ``url`` until an empty page; each page with_retry'd."""
+    async def _get_single(url: str) -> list[dict[str, Any]]:
+        """One GET — the endpoint returns the full list and ignores ``page``."""
+        return await _get(url, {})
+
+    async def _get_paginated(url: str, *, what: str) -> list[dict[str, Any]]:
+        """Page through a PAGINATED ``url`` until an empty page; each page with_retry'd."""
         rows: list[dict[str, Any]] = []
         for page in range(_FMP_MAX_PAGES):
-            page_rows = await _get_page(url, page)
+            page_rows = await _get(url, {"page": page})
             if not page_rows:
                 break
             rows.extend(page_rows)
@@ -6485,8 +6495,8 @@ async def _fetch_fmp_universe_entries(*, log: Any) -> list[Any]:
             )
         return rows
 
-    stock_rows = await _get_all(_FMP_STOCK_LIST_URL, what="stock-list")
-    delisted_rows = await _get_all(_FMP_DELISTED_URL, what="delisted")
+    stock_rows = await _get_single(_FMP_STOCK_LIST_URL)
+    delisted_rows = await _get_paginated(_FMP_DELISTED_URL, what="delisted")
 
     delisted_by_symbol: dict[str, dict[str, Any]] = {}
     for r in delisted_rows:
