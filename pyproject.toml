@@ -544,6 +544,27 @@ ignore = ["E501"]
 # never an inline ``# noqa: SLF001``.
 "tests/test_stage_historical_macro_indicators.py" = ["SLF"]
 "tests/test_rebuild_corporate_actions_from_archive.py" = ["SLF"]
+# Plan 3 Phase 1 identity-build stage pins (2026-06-05). The tests name the
+# ``scripts/ops.py``-private identity-stage symbols (``_STAGE_SPECS``,
+# ``_OFF_CYCLE_STAGES``, ``_IDENTITY_BUILD_ORDER``, ``_stage_issuers_build``,
+# ``_stage_ticker_history_reuse_build``, ``_stage_issuer_securities_build``,
+# ``_stage_identity_build``, ``_stage_universe_build``) to pin registration,
+# off-cycle status, canonical order, idempotent conflict targets, and the
+# BLOCKING gate dispatch — that IS the tests' purpose. Data-lane-module-
+# private (NOT tpcore-private) access; the scoped per-file ignore is the
+# canonical form (mirrors the Wave-1/2/3 stage-pin precedents above) —
+# never an inline ``# noqa: SLF001`` (CLAUDE.md / STYLE_GUIDE; also trips
+# the security_pattern_scan no-inline-SLF rule).
+"tests/test_identity_build_stages.py" = ["SLF"]
+# Plan 3 Phase 1.4 identity-gate probe pins (2026-06-05). The SQL-text
+# assertion that the cik-join is zfill-normalized on BOTH sides names the
+# ``tpcore.identity.identity_gate``-private ``_CLASSIFICATION_WITHOUT_ISSUER_SQL``
+# constant — that IS the test's purpose (it pins the false-orphan-prevention
+# predicate so an unpadded FMP-fallback cik cannot regress into a false
+# BLOCKING abort). Module-private access in a probe-shape pin; the scoped
+# per-file ignore is the canonical form — never an inline ``# noqa: SLF001``
+# (CLAUDE.md / STYLE_GUIDE; also trips the security_pattern_scan rule).
+"tpcore/identity/tests/test_identity_gate.py" = ["SLF"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -42,7 +42,7 @@ def _ops_text() -> str:
 
 def test_stages_registered() -> None:
     from scripts import ops
-    names = {n for n, _, _ in ops._STAGE_SPECS}  # noqa: SLF001
+    names = {n for n, _, _ in ops._STAGE_SPECS}
     for stage in (
         "issuers_build",
         "ticker_history_reuse_build",
@@ -61,7 +61,7 @@ def test_stages_are_off_cycle() -> None:
         "issuer_securities_build",
         "identity_build",
     ):
-        assert stage in ops._OFF_CYCLE_STAGES, stage  # noqa: SLF001
+        assert stage in ops._OFF_CYCLE_STAGES, stage
 
 
 def test_stages_not_in_dashboard_update_cadence() -> None:
@@ -79,7 +79,7 @@ def test_orchestrator_order_is_canonical() -> None:
     """universe_build → issuers_build → ticker_history_reuse_build →
     issuer_securities_build (spec §5.3 identity-first order)."""
     from scripts import ops
-    assert ops._IDENTITY_BUILD_ORDER == (  # noqa: SLF001
+    assert ops._IDENTITY_BUILD_ORDER == (
         "universe_build",
         "issuers_build",
         "ticker_history_reuse_build",
@@ -211,7 +211,7 @@ async def test_issuers_build_dry_run_no_write(
     pool, executed = _make_pool(
         fetch_rows=[{"cik": "0000320193", "country": "US"}]
     )
-    result = await ops._stage_issuers_build(  # noqa: SLF001
+    result = await ops._stage_issuers_build(
         pool, {"dry_run": True, "min_resolved": 1}
     )
     assert result["dry_run"] is True
@@ -241,7 +241,7 @@ async def test_issuers_build_live_inserts_and_idempotency(
     pool, executed = _make_pool(
         fetch_rows=[{"cik": "0000320193", "country": "US"}]
     )
-    result = await ops._stage_issuers_build(  # noqa: SLF001
+    result = await ops._stage_issuers_build(
         pool, {"dry_run": False, "min_resolved": 1}
     )
     assert result["dry_run"] is False
@@ -267,7 +267,7 @@ async def test_issuers_build_degraded_source_hard_stops(
     _stub_sec_reader(monkeypatch, {})  # empty bulk file
     pool, _ = _make_pool(fetch_rows=[{"cik": "0000320193", "country": "US"}])
     with pytest.raises(RuntimeError, match="issuers resolved|floor"):
-        await ops._stage_issuers_build(  # noqa: SLF001
+        await ops._stage_issuers_build(
             pool, {"dry_run": True, "min_resolved": 1}
         )
 
@@ -280,7 +280,7 @@ async def test_issuers_build_empty_universe_hard_stops(
     _stub_sec_reader(monkeypatch, {})
     pool, _ = _make_pool(fetch_rows=[])  # universe_build not run yet
     with pytest.raises(RuntimeError, match="0 cik-bearing"):
-        await ops._stage_issuers_build(pool, {"dry_run": True})  # noqa: SLF001
+        await ops._stage_issuers_build(pool, {"dry_run": True})
 
 
 @pytest.mark.asyncio
@@ -301,7 +301,7 @@ async def test_issuers_build_shard_error_untrusted_fpfd(
     }
     _stub_sec_reader(monkeypatch, payloads)
     pool, _ = _make_pool(fetch_rows=[{"cik": "0000000002", "country": "US"}])
-    result = await ops._stage_issuers_build(  # noqa: SLF001
+    result = await ops._stage_issuers_build(
         pool, {"dry_run": True, "min_resolved": 1}
     )
     assert result["n_untrusted_fpfd"] == 1
@@ -322,7 +322,7 @@ async def test_ticker_history_reuse_build_dry_run(
          "lifetime_start": date(2010, 1, 1), "lifetime_end": None},
     ]
     pool, executed = _make_pool(fetch_rows=rows)
-    result = await ops._stage_ticker_history_reuse_build(  # noqa: SLF001
+    result = await ops._stage_ticker_history_reuse_build(
         pool, {"dry_run": True}
     )
     assert result["dry_run"] is True
@@ -343,7 +343,7 @@ async def test_ticker_history_reuse_build_live_inserts(
          "lifetime_start": date(2010, 1, 1), "lifetime_end": None},
     ]
     pool, executed = _make_pool(fetch_rows=rows)
-    result = await ops._stage_ticker_history_reuse_build(  # noqa: SLF001
+    result = await ops._stage_ticker_history_reuse_build(
         pool, {"dry_run": False, "chunk_size": 100}
     )
     assert result["rows_inserted"] == 2
@@ -366,7 +366,7 @@ async def test_ticker_history_reuse_build_overlap_hard_stops(
     ]
     pool, _ = _make_pool(fetch_rows=rows)
     with pytest.raises(ValueError, match="overlap"):
-        await ops._stage_ticker_history_reuse_build(  # noqa: SLF001
+        await ops._stage_ticker_history_reuse_build(
             pool, {"dry_run": True}
         )
 
@@ -387,7 +387,7 @@ async def test_issuer_securities_build_fanout(
          "lifetime_start": date(2004, 8, 19), "lifetime_end": None},
     ]
     pool, executed = _make_pool(fetch_rows=rows)
-    result = await ops._stage_issuer_securities_build(  # noqa: SLF001
+    result = await ops._stage_issuer_securities_build(
         pool, {"dry_run": False, "chunk_size": 100}
     )
     assert result["links_inserted"] == 2
@@ -412,7 +412,7 @@ async def test_issuer_securities_build_dry_run(
          "lifetime_start": date(1994, 12, 12), "lifetime_end": None},
     ]
     pool, executed = _make_pool(fetch_rows=rows)
-    result = await ops._stage_issuer_securities_build(  # noqa: SLF001
+    result = await ops._stage_issuer_securities_build(
         pool, {"dry_run": True}
     )
     assert result["dry_run"] is True
@@ -450,7 +450,7 @@ async def test_identity_build_orchestrator_runs_in_order(
         await _fake("issuer_securities_build"),
     )
     pool, _ = _make_pool()
-    result = await ops._stage_identity_build(pool, {"dry_run": True})  # noqa: SLF001
+    result = await ops._stage_identity_build(pool, {"dry_run": True})
     assert calls == [
         "universe_build",
         "issuers_build",
@@ -480,10 +480,12 @@ async def test_identity_build_live_runs_blocking_gate(
     ):
         monkeypatch.setattr(ops, attr, _noop)
 
-    # gate sees a NULL lifetime_start → raises.
-    pool, _ = _make_pool(fetchval_answers={"lifetime_start IS NULL": 2})
+    # gate sees a surviving 1900-01-01 sentinel lifetime_start → raises.
+    pool, _ = _make_pool(
+        fetchval_answers={"lifetime_start = DATE '1900-01-01'": 2}
+    )
     with pytest.raises(RuntimeError, match="identity gate"):
-        await ops._stage_identity_build(  # noqa: SLF001
+        await ops._stage_identity_build(
             pool, {"dry_run": False}
         )
 
@@ -506,7 +508,7 @@ async def test_identity_build_live_passes_clean_gate(
         monkeypatch.setattr(ops, attr, _noop)
 
     pool, _ = _make_pool()  # all gate probes return 0 → clean
-    result = await ops._stage_identity_build(  # noqa: SLF001
+    result = await ops._stage_identity_build(
         pool, {"dry_run": False}
     )
     assert result["identity_gate"]["passed"] is True

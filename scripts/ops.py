@@ -7161,9 +7161,12 @@ async def _stage_ticker_history_reuse_build(
     Identity-first stage #3 (Plan 3 Phase 1; G3 reuse). For each ticker,
     its classifications are ordered by lifetime_start and emitted one
     ticker_history row each — a delisted-then-reused ticker gets MULTIPLE
-    contiguous rows. The half-open [valid_from, valid_to) EXCLUDE
-    constraint enforces no-overlap; the pure layer HARD-STOPS on a true
-    overlap (a surfaced data defect, never silently mangled).
+    contiguous rows. The DB EXCLUDE (migration 20260524_0100) keys on
+    classification_id WITH =, so it ONLY guards same-classification
+    overlap — it does NOT catch cross-classification, same-ticker (G3
+    reuse) overlap. That overlap is guarded by the pure layer's HARD-STOP
+    (derive_ticker_history raises ValueError) and the identity_gate
+    ticker_history_overlaps probe; the gate must run on every live build.
 
     Idempotency: ON CONFLICT (classification_id, valid_from) DO NOTHING —
     a re-run produces ZERO new/duplicate rows.
@@ -7201,8 +7204,9 @@ async def _stage_ticker_history_reuse_build(
         )
         for r in rows
     ]
-    # derive_ticker_history HARD-STOPS (ValueError) on a true overlap — a
-    # data defect the EXCLUDE constraint would reject; surface it.
+    # derive_ticker_history HARD-STOPS (ValueError) on a cross-classification
+    # same-ticker overlap (G3) — which the per-classification EXCLUDE does
+    # NOT catch; the identity_gate overlap probe is the post-load backstop.
     history = derive_ticker_history(lifetimes)
     log.info(
         "ops.stage.ticker_history_reuse_build.derived",

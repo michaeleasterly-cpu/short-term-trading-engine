@@ -16,11 +16,17 @@ lifetimes (``classification_id``, ``ticker``, ``lifetime_start``,
     contiguous rows (G3), one per classification.
 
 The ``ticker_history_no_overlap`` EXCLUDE constraint (migration
-``20260524_0100``) uses the half-open ``daterange(valid_from,
-COALESCE(valid_to,'infinity'),'[)')`` so contiguous handoff
-(``predecessor.valid_to == successor.valid_from``) is allowed; a true
-overlap is rejected. This module mirrors that: contiguity is fine,
-**overlap HARD-STOPS** (a data defect to surface, not silently mangle).
+``20260524_0100``:68-72) keys on ``classification_id WITH =``, so it ONLY
+rejects overlap WITHIN a single classification — it does NOT guard the
+cross-classification, same-ticker (G3 reuse) overlap that this module
+derives. That cross-ticker overlap is guarded by **this module's pure-layer
+hard-stop** below AND the ``identity_gate`` ``ticker_history_overlaps``
+probe — NOT by the DB EXCLUDE. The gate must therefore run on every live
+build (the EXCLUDE alone would let a cross-classification overlap through).
+This module uses the same half-open ``daterange(valid_from,
+COALESCE(valid_to,'infinity'),'[)')`` semantics: contiguous handoff
+(``predecessor.valid_to == successor.valid_from``) is fine, **overlap
+HARD-STOPS** (a data defect to surface, not silently mangle).
 
 The stage handler in ``scripts/ops.py::_stage_ticker_history_reuse_build``
 owns the I/O — it SELECTs the lifetimes, calls ``derive_ticker_history``
@@ -85,9 +91,13 @@ def derive_ticker_history(
 
     Guards:
       * ``lifetime_end <= lifetime_start`` → DROP + WARN (date-order).
-      * Half-open windows for the same ticker that OVERLAP → ``ValueError``
-        (a defect the DB EXCLUDE would reject — surfaced, not mangled).
-        Contiguous handoff (``valid_to == next valid_from``) is allowed.
+      * Half-open windows for the same ticker (ACROSS classifications) that
+        OVERLAP → ``ValueError``. NOTE: the DB EXCLUDE keys on
+        ``classification_id WITH =`` and so does NOT catch this
+        cross-classification overlap — this hard-stop (and the
+        ``identity_gate`` overlap probe) is the ONLY guard for G3 reuse
+        overlap; surfaced, not mangled. Contiguous handoff
+        (``valid_to == next valid_from``) is allowed.
     """
     by_ticker: dict[str, list[ClassificationLifetime]] = {}
     for cl in lifetimes:
@@ -125,9 +135,11 @@ def derive_ticker_history(
                         f"{ticker!r} — {prev.classification_id} "
                         f"[{prev.lifetime_start}, {prev_end}) and "
                         f"{cl.classification_id} starting "
-                        f"{cl.lifetime_start}. The ticker_history EXCLUDE "
-                        "constraint would reject this; surfacing the defect "
-                        "rather than silently mangling it (G3)."
+                        f"{cl.lifetime_start}. The DB EXCLUDE keys on "
+                        "classification_id WITH = and does NOT catch this "
+                        "cross-classification overlap; this hard-stop + the "
+                        "identity_gate overlap probe are the guard. Surfacing "
+                        "the defect rather than silently mangling it (G3)."
                     )
             out.append(
                 TickerHistoryRow(
