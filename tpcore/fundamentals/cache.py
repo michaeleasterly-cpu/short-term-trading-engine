@@ -321,8 +321,7 @@ class FundamentalsCache:
                 recorded_at
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
-            ON CONFLICT (ticker, filing_date) DO UPDATE SET
-                period_end_date = EXCLUDED.period_end_date,
+            ON CONFLICT (ticker, period_end_date, filing_date) DO UPDATE SET
                 period_label = EXCLUDED.period_label,
                 net_income = EXCLUDED.net_income,
                 fcf = EXCLUDED.fcf,
