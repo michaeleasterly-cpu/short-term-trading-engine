@@ -5,11 +5,13 @@
 #
 # The TRUNCATE list below is FK-COMPLETE (Task 6 verification, live FK map
 # 2026-06-04): every child of a truncated parent is itself in the statement.
-# Parents truncated: ticker_classifications (17 children) + issuers (3 children).
+# Parents truncated: ticker_classifications + issuers and all their children.
 # options_max_pain (a ticker_classifications child) is EXCLUDED because it is
-# DROPPED by migration 20260604_0300, which applies BEFORE this wipe — by Task 7
-# it no longer exists. ingest_quarantine -> ingest_manifest is NOT forced in:
-# ingest_manifest is PRESERVE (not truncated).
+# DROPPED by migration 20260604_0300, which applies BEFORE this wipe. By contrast
+# ticker_lifecycle_events is KEPT (its corporate_events fold is deferred to Plan 3)
+# so it IS in the TRUNCATE (it FKs ticker_classifications). ingest_quarantine ->
+# ingest_manifest is NOT forced in: ingest_manifest is PRESERVE (not truncated).
+# Re-verify FK-completeness at execution (Task 6) before running.
 #
 # PRECONDITION (operator-gated, Task 7 Step 1): PRESERVE snapshot + Supabase
 # on-demand snapshot + PITR anchor recorded; writers paused; migrations
@@ -28,6 +30,7 @@ TRUNCATE TABLE
   platform.corporate_actions, platform.earnings_events, platform.short_interest,
   platform.borrow_rates, platform.insider_transactions, platform.insider_sentiment,
   platform.social_sentiment, platform.sec_material_events, platform.spread_observations,
-  platform.liquidity_tiers, platform.universe_candidates, platform.aar_events
+  platform.liquidity_tiers, platform.universe_candidates, platform.aar_events,
+  platform.ticker_lifecycle_events
   RESTART IDENTITY;"
 echo "WIPE complete."

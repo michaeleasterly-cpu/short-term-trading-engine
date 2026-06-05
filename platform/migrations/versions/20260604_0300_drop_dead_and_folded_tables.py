@@ -1,13 +1,15 @@
 """Plan 2 cutover — drop the dead / Tradier / re-derivable-folded tables.
 
 Spec §2.2/§2.3. tradier_options_chains (Tradier closed), options_max_pain (no
-producer) + its classification_id trigger + backing function, ticker_lifecycle_events
-(re-derived into corporate_events in Plan 3 — corporate_events.event_kind already
-admits 'delisting'/'bankruptcy_reorg'/'bankruptcy_liquidation', verified live
-2026-06-04), the empty evidence/parity/forensics sidecars (folded into
-data_quality_log via ``kind`` in 0500), and ingestion_metrics (routes to
-ingest_manifest). split_pre_image_log, ingest_quarantine, failed_alpha_ledger
-are KEPT. macro_data + the PRESERVE-class ops tables are untouched.
+producer) + its classification_id trigger + backing function, the empty
+evidence/parity/forensics sidecars (folded into data_quality_log via ``kind``
+in 0500), and ingestion_metrics (routes to ingest_manifest). split_pre_image_log,
+ingest_quarantine, failed_alpha_ledger, AND ticker_lifecycle_events are KEPT here:
+ticker_lifecycle_events still has a live producer (scripts/ops.py SEC-lifecycle
+stage) — its fold into corporate_events is a Plan 3 re-ingest task (re-derive
+Form 25/15 events into the M&A graph), not a Plan 2 schema drop; it is TRUNCATEd
+with the ticker graph (it FKs ticker_classifications). macro_data + the
+PRESERVE-class ops tables are untouched.
 
 Pre-flight audit (live introspection 2026-06-04, alembic head 20260604_0200):
   * NO table FKs any DROP-set table (pg_constraint contype='f' scan → empty).
@@ -43,7 +45,6 @@ def upgrade() -> None:
     # split_pre_image_log, ingest_quarantine, failed_alpha_ledger, ingest_manifest.
     op.execute("DROP TABLE IF EXISTS platform.tradier_options_chains CASCADE")
     op.execute("DROP TABLE IF EXISTS platform.options_max_pain CASCADE")
-    op.execute("DROP TABLE IF EXISTS platform.ticker_lifecycle_events CASCADE")
     op.execute("DROP TABLE IF EXISTS platform.fundamentals_period_source_evidence CASCADE")
     op.execute("DROP TABLE IF EXISTS platform.parity_drift_log CASCADE")
     op.execute("DROP TABLE IF EXISTS platform.forensics_triggers CASCADE")

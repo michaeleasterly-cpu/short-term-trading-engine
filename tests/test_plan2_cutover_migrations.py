@@ -22,14 +22,16 @@ TIGHTEN_MIG = _VERSIONS / "20260604_0600_tighten_identity_fundamentals_schema.py
 DROPPED = [
     "tradier_options_chains",
     "options_max_pain",
-    "ticker_lifecycle_events",
     "fundamentals_period_source_evidence",
     "parity_drift_log",
     "forensics_triggers",
     "ingestion_metrics",
 ]
 # These must NOT be dropped by the cutover (KEPT standalone / deferred).
-KEPT = ["split_pre_image_log", "ingest_quarantine", "failed_alpha_ledger", "ingest_manifest"]
+# ticker_lifecycle_events stays (live SEC-lifecycle producer); its corporate_events
+# fold is a Plan 3 re-ingest task — it is TRUNCATEd with the ticker graph, not dropped.
+KEPT = ["split_pre_image_log", "ingest_quarantine", "failed_alpha_ledger",
+        "ingest_manifest", "ticker_lifecycle_events"]
 
 
 # ── Task 3: DROP-set migration ────────────────────────────────────────────────

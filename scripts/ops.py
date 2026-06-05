@@ -1542,53 +1542,6 @@ async def _stage_compute_fundamental_ratios(
     }
 
 
-async def _stage_cross_ref_cleanup(pool: asyncpg.Pool) -> dict[str, Any]:
-    """Auto-clean known-safe cross-table integrity violations.
-
-    The cross-table audit (scripts/audit_all_tables.py + dashboard's
-    cross_ref panel) historically just *reported* violations and asked
-    the operator to clean them. That's wrong: most of these are pure
-    data-hygiene (e.g., options whose expiration_date passed) and have
-    a single safe remediation — delete the row.
-
-    What this stage cleans (additively — only add rules here for which
-    "delete the row" is the proven-correct action):
-
-    * ``tradier_options_chains`` rows with ``expiration_date < today``
-      — frozen S2 table; expired contracts are permanently dead.
-    * ``tradier_options_chains`` rows whose ticker has no row in
-      ``prices_daily`` — orphan options, no underlying to price against.
-
-    Returns counts so the operator can see what got cleaned. Idempotent
-    by construction (same query, deletes shrink to zero next run).
-    """
-    def _count_from_status(status: str) -> int:
-        # asyncpg execute() returns "DELETE N" — extract N.
-        try:
-            return int(status.split()[-1])
-        except (ValueError, IndexError):
-            return 0
-
-    async with pool.acquire() as conn:
-        expired_status = await conn.execute(
-            "DELETE FROM platform.tradier_options_chains WHERE expiration_date < CURRENT_DATE"
-        )
-        orphan_status = await conn.execute(
-            """
-            DELETE FROM platform.tradier_options_chains tc
-            WHERE NOT EXISTS (
-                SELECT 1 FROM platform.prices_daily_tickers t
-                WHERE t.ticker = tc.ticker
-            )
-            """
-        )
-
-    return {
-        "deleted_expired_options": _count_from_status(expired_status),
-        "deleted_orphan_options": _count_from_status(orphan_status),
-    }
-
-
 async def _stage_risk_close_ledger_prune(pool: asyncpg.Pool) -> dict[str, Any]:
     """Bounded 14-day prune of ``platform.risk_close_ledger`` (#251 B1.4).
 
@@ -11438,11 +11391,6 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # daemon restart, leaving orphan orders to accumulate silently.
     ("reconcile",           lambda pool, cfg: (lambda: _stage_reconcile(pool)),                STAGE_TIMEOUT_SEC),
     ("coverage_fill",       lambda pool, cfg: (lambda: _stage_coverage_fill(pool)),            STAGE_TIMEOUT_SEC),
-    # Self-heal cross-table integrity violations — delete expired
-    # tradier_options_chains rows + orphan-ticker rows so the operator
-    # doesn't see them as red on the dashboard for human triage. Each
-    # rule must have a single proven-safe remediation; see the docstring.
-    ("cross_ref_cleanup",   lambda pool, cfg: (lambda: _stage_cross_ref_cleanup(pool)),        STAGE_TIMEOUT_SEC),
     # Bounded 14-day prune of platform.risk_close_ledger (#251 B1.4) —
     # the never-fail-open close arbiter only needs to retain a close key
     # long enough to dedupe the same-session dual-decrement; a settled
@@ -16437,12 +16385,6 @@ _AUDIT_CHECKS: tuple[tuple[str, str, str], ...] = (
         SELECT COUNT(*) FROM platform.universe_candidates uc
         LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
         ON p.ticker = uc.ticker WHERE p.ticker IS NULL"""),
-    ("tradier_options_chains", "expired",
-        "SELECT COUNT(*) FROM platform.tradier_options_chains WHERE expiration_date < CURRENT_DATE"),
-    ("tradier_options_chains", "ticker_not_in_prices", """
-        SELECT COUNT(*) FROM platform.tradier_options_chains tc
-        LEFT JOIN (SELECT DISTINCT ticker FROM platform.prices_daily) p
-        ON p.ticker = tc.ticker WHERE p.ticker IS NULL"""),
     ("liquidity_tiers", "stale_30d",
         "SELECT COUNT(*) FROM platform.liquidity_tiers WHERE last_updated < now() - INTERVAL '30 days'"),
 )
