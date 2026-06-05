@@ -258,10 +258,20 @@ class SECCompanyFactsAdapter:
           * ``document_type_history``: full histogram across ALL forms
             (not filtered) for diagnostics.
 
-          * ``first_public_filing_date``: min(reportDate) over rows
-            where form == primary. Anchors on the primary periodic
-            report (not on first 8-K) so SPACs and post-IPO entities
-            are dated correctly.
+          * ``first_public_filing_date`` (FPFD): the earliest
+            ``filingDate`` across the issuer's **full submission index**
+            (ALL forms — S-1 / 424B / 8-A / 10-Q / 10-K / …), NOT
+            ``min(reportDate)`` of the primary periodic form. This is
+            the first time the entity made ANY SEC filing (spec
+            §5.5/A5). The prior ``min(reportDate)`` formula was the
+            earliest fiscal-PERIOD-END (the period a filing reports on),
+            which reintroduces look-ahead — a Q1-FY2010 10-K filed in
+            2010 reports a period ending 2009 — and ignores the issuer's
+            first non-periodic public filings (S-1 / 424B / 8-A), which
+            are the true "first public filing". Callers wanting the
+            "first periodic-fundamentals available" concept use the
+            separate ``first_periodic_report_date`` boundary — never
+            conflated with FPFD.
 
           * ``last_filing_date``: max(filingDate) across ALL rows.
             Used downstream (P2) to corroborate delisting via
@@ -344,7 +354,6 @@ class SECCompanyFactsAdapter:
             periodic_rows.append((f, fd_d, rd_d))
 
         primary: str | None = None
-        first_filing: _date | None = None
         if periodic_rows:
             periodic_counter: Counter = Counter(
                 r[0] for r in periodic_rows
@@ -376,17 +385,14 @@ class SECCompanyFactsAdapter:
                         key=lambda k: most_recent_by_base[k],
                     )
 
-            if primary:
-                primary_report_dates = [
-                    rd for f, _fd, rd in periodic_rows
-                    if f.rstrip("/A").rstrip("/") == primary and rd is not None
-                ]
-                if primary_report_dates:
-                    first_filing = min(primary_report_dates)
-
-        # last_filing_date — over ALL forms (not just periodic).
+        # FPFD + last_filing_date — both derived from filingDate over
+        # ALL forms (the full submission index), NOT the primary-periodic
+        # subset. FPFD = earliest filingDate (spec §5.5/A5: the first
+        # time the entity made ANY SEC filing — an S-1/424B/8-A predates
+        # the first 10-Q); last_filing_date = latest filingDate.
+        first_filing: _date | None = None
         last_filing: _date | None = None
-        all_fd = []
+        all_fd: list[_date] = []
         for fd in filing_dates:
             try:
                 d = _date.fromisoformat(fd) if fd else None
@@ -395,6 +401,7 @@ class SECCompanyFactsAdapter:
             except (ValueError, TypeError):
                 continue
         if all_fd:
+            first_filing = min(all_fd)
             last_filing = max(all_fd)
 
         return {

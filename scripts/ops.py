@@ -6295,6 +6295,329 @@ async def _stage_evaluate_provider_parity(
     }
 
 
+# ────────────────────────────────────────────────────────────────────────
+# universe_build — survivorship-free, identity-first universe minter
+# (Plan 3 Phase 1; spec §4/§5.2/§5.3/§5.5; discovery
+# docs/audits/2026-06-05-identity-build-code-state.md).
+#
+# IDENTITY-FIRST: this stage mints the WHOLE survivorship-free universe's
+# ticker_classifications rows (TKR-14 id + cik + lifetime_start=FPFD,
+# delisted INCLUDED) from SEC full company list ∪ FMP symbol +
+# delisting/symbol-change history. It is the correct replacement for the
+# legacy Alpaca-active classify_tickers minter (discovery §1). It is
+# operator/orchestrator-only (in _OFF_CYCLE_STAGES — NOT the child-first
+# --update order) because identity must be built BEFORE child loads so
+# the 14 BEFORE INSERT triggers attribute classification_id correctly.
+#
+# CSV-first sub-protocol (data-adapter rule): the SEC/FMP source pulls
+# resolve archive-first; the live HTTP fetches are with_retry-wrapped
+# (tpcore.outage.with_retry — never local retry loops). The pure
+# assembly + mint logic lives in tpcore/identity/universe_build.py
+# (no DB/network) and is exercised by tpcore/identity/tests/
+# test_universe_build.py.
+# ────────────────────────────────────────────────────────────────────────
+
+
+_FMP_STOCK_LIST_URL = "https://financialmodelingprep.com/stable/stock-list"
+_FMP_DELISTED_URL = (
+    "https://financialmodelingprep.com/stable/delisted-companies"
+)
+
+
+def _parse_iso_date(raw: Any) -> date | None:
+    """Best-effort ISO-date parse; None on any failure (no guessing)."""
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(str(raw)[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+async def _fetch_sec_universe_entries(*, log: Any) -> list[Any]:
+    """Fetch the SEC full company list + per-CIK FPFD → SECUniverseEntry[].
+
+    Bulk-first (feedback_bulk_before_api_crawl_REINFORCED):
+      1. ``SECTickerCIKMap.fetch`` — the single ~1.5MB company_tickers.json
+         pull (ticker→CIK→title).
+      2. ``SECSubmissionsBulkReader`` — the cached/bulk submissions.zip;
+         per-CIK FPFD via ``extract_filing_metadata`` (the FIXED earliest
+         filingDate — spec §5.5/A5). No per-CIK HTTP.
+
+    Returns ``SECUniverseEntry`` rows. Pure assembly + mint happen later
+    in ``assemble_universe`` — this function is the I/O seam.
+    """
+    from tpcore.identity.universe_build import SECUniverseEntry  # noqa: PLC0415
+    from tpcore.sec.companyfacts_adapter import (  # noqa: PLC0415
+        SECCompanyFactsAdapter,
+    )
+    from tpcore.sec.submissions_bulk_reader import (  # noqa: PLC0415
+        SECSubmissionsBulkReader,
+        ensure_zip_cached,
+    )
+    from tpcore.sec.ticker_cik_map import SECTickerCIKMap  # noqa: PLC0415
+
+    user_agent = os.environ.get("SEC_EDGAR_USER_AGENT")
+    if not user_agent:
+        raise RuntimeError(
+            "universe_build: SEC_EDGAR_USER_AGENT is required for the SEC "
+            "company-list + submissions pulls."
+        )
+
+    ticker_map = await SECTickerCIKMap().fetch()
+    # Ensure the bulk submissions.zip is locally available (archive-first).
+    await ensure_zip_cached(user_agent=user_agent)
+
+    entries: list[Any] = []
+    with SECSubmissionsBulkReader() as reader:
+        for ticker, entry in ticker_map.items():
+            fpfd = None
+            payload = reader.get_merged_submissions(entry.cik)
+            if payload is not None:
+                meta = SECCompanyFactsAdapter.extract_filing_metadata(payload)
+                fpfd = meta.get("first_public_filing_date")
+            entries.append(
+                SECUniverseEntry(
+                    ticker=ticker,
+                    cik=entry.cik,
+                    legal_name=entry.company_name,
+                    first_public_filing_date=fpfd,
+                )
+            )
+        log.info(
+            "ops.stage.universe_build.sec_fetched",
+            n_entries=len(entries),
+            **reader.stats(),
+        )
+    return entries
+
+
+async def _fetch_fmp_universe_entries(*, log: Any) -> list[Any]:
+    """Fetch the FMP symbol list + delisted history → FMPUniverseEntry[].
+
+    Single bulk GET per endpoint, ``with_retry``-wrapped (never a local
+    retry loop). Delisted companies are INCLUDED so the roster is
+    survivorship-free (invariant G1/G3).
+    """
+    import httpx  # noqa: PLC0415
+
+    from tpcore.identity.universe_build import FMPUniverseEntry  # noqa: PLC0415
+    from tpcore.outage import with_retry  # noqa: PLC0415
+
+    api_key = os.environ.get("FMP_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "universe_build: FMP_API_KEY is required for the FMP symbol-list "
+            "+ delisted pulls."
+        )
+
+    @with_retry(max_attempts=4, backoff_base_sec=2.0, backoff_cap_sec=30.0)
+    async def _get(url: str) -> list[dict[str, Any]]:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.get(url, params={"apikey": api_key})
+            resp.raise_for_status()
+            payload = resp.json()
+        return payload if isinstance(payload, list) else []
+
+    stock_rows = await _get(_FMP_STOCK_LIST_URL)
+    delisted_rows = await _get(_FMP_DELISTED_URL)
+
+    delisted_by_symbol: dict[str, dict[str, Any]] = {}
+    for r in delisted_rows:
+        sym = str(r.get("symbol") or "").strip().upper()
+        if sym:
+            delisted_by_symbol[sym] = r
+
+    entries: list[Any] = []
+    seen: set[str] = set()
+    for r in stock_rows:
+        sym = str(r.get("symbol") or "").strip().upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        d = delisted_by_symbol.get(sym)
+        entries.append(
+            FMPUniverseEntry(
+                ticker=sym,
+                company_name=r.get("name") or r.get("companyName"),
+                country=str(r.get("country") or "US").strip().upper()[:2] or "US",
+                delisted=d is not None,
+                delisting_date=_parse_iso_date(d.get("delistedDate")) if d else None,
+            )
+        )
+    # Delisted symbols absent from the active stock-list are STILL part of
+    # the survivorship-free universe — add them (G1/G3).
+    for sym, d in delisted_by_symbol.items():
+        if sym in seen:
+            continue
+        seen.add(sym)
+        entries.append(
+            FMPUniverseEntry(
+                ticker=sym,
+                company_name=d.get("companyName") or d.get("name"),
+                country=str(d.get("country") or "US").strip().upper()[:2] or "US",
+                delisted=True,
+                delisting_date=_parse_iso_date(d.get("delistedDate")),
+            )
+        )
+    log.info(
+        "ops.stage.universe_build.fmp_fetched",
+        n_stock=len(stock_rows),
+        n_delisted=len(delisted_rows),
+        n_entries=len(entries),
+    )
+    return entries
+
+
+_UNIVERSE_INSERT_SQL = """
+    INSERT INTO platform.ticker_classifications
+        (id, ticker, current_ticker, asset_class, source, cik,
+         current_legal_name, discovery_source, lifetime_start, lifetime_end,
+         status, updated_at)
+    SELECT id, ticker, current_ticker, asset_class, source, cik,
+           current_legal_name, discovery_source, lifetime_start, lifetime_end,
+           status, now()
+    FROM unnest(
+        $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
+        $6::text[], $7::text[], $8::text[], $9::date[], $10::date[],
+        $11::text[]
+    ) AS t(id, ticker, current_ticker, asset_class, source, cik,
+           current_legal_name, discovery_source, lifetime_start, lifetime_end,
+           status)
+    ON CONFLICT (id) DO NOTHING
+"""
+
+
+async def _insert_universe_rows(
+    pool: asyncpg.Pool, rows: list[Any], *, chunk_size: int, log: Any
+) -> int:
+    """Chunked idempotent INSERT of UniverseSecurity rows.
+
+    Chunked at ``chunk_size`` (>100K-row Supabase mechanics, spec §7) to
+    avoid a single-transaction WAL blow-up. ``ON CONFLICT (id) DO NOTHING``
+    makes re-runs idempotent. ``lifetime_start`` is ALWAYS supplied (the
+    pydantic model requires it; the column is NOT NULL no-sentinel — A6).
+    """
+    n_committed = 0
+    async with pool.acquire() as conn:
+        for start in range(0, len(rows), chunk_size):
+            chunk = rows[start : start + chunk_size]
+            await conn.execute(
+                _UNIVERSE_INSERT_SQL,
+                [r.id for r in chunk],
+                [r.ticker for r in chunk],
+                [r.current_ticker for r in chunk],
+                [r.asset_class for r in chunk],
+                [r.source for r in chunk],
+                [r.cik for r in chunk],
+                [r.legal_name for r in chunk],
+                [r.discovery_source for r in chunk],
+                [r.lifetime_start for r in chunk],
+                [r.lifetime_end for r in chunk],
+                ["active" if r.lifetime_end is None else "delisted" for r in chunk],
+            )
+            n_committed += len(chunk)
+            log.info(
+                "ops.stage.universe_build.chunk_committed",
+                chunk_start=start,
+                chunk_rows=len(chunk),
+            )
+    return n_committed
+
+
+async def _stage_universe_build(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Mint the survivorship-free, identity-first universe.
+
+    Identity-first minter (Plan 3 Phase 1). Assembles SEC full company
+    list ∪ FMP symbol + delisting history into the whole universe's
+    ``ticker_classifications`` rows — each with a TKR-14 ``id`` (via
+    ``tpcore.identity.tkr14.mint`` + salt-collision retry), ``cik``,
+    ``discovery_source``, ``current_ticker``, and an explicit
+    ``lifetime_start`` (= SEC FPFD, or earliest FMP date for the OQ-1
+    gray zone, NEVER the ``1900-01-01`` sentinel). Delisted tickers are
+    INCLUDED with ``lifetime_end`` set (survivorship-free, G1/G3).
+
+    SEC-first authority (A7/A8): SEC wins identity for any ticker it
+    covers; FMP is the gray-zone fallback only (cik=None,
+    discovery_source='F').
+
+    Knobs (``--param key=value``):
+      * ``dry_run`` (default True) — assemble + report counts WITHOUT any
+        INSERT. ``--param dry_run=false`` for the live mint.
+      * ``chunk_size`` (default 100000) — INSERT batch size.
+
+    This stage is NOT in the child-first ``--update`` order (it is in
+    ``_OFF_CYCLE_STAGES``); it runs via the identity-first orchestrator or
+    an explicit ``--stage universe_build`` invocation.
+    """
+    cfg = cfg or {}
+    log = structlog.get_logger("ops.stage.universe_build")
+    dry_run = _stage_param_to_bool(cfg.get("dry_run", True))
+    chunk_size = int(cfg.get("chunk_size", 100_000))
+
+    from tpcore.identity.universe_build import assemble_universe  # noqa: PLC0415
+
+    sec_entries = await _fetch_sec_universe_entries(log=log)
+    fmp_entries = await _fetch_fmp_universe_entries(log=log)
+
+    now = datetime.now(UTC)
+    rows = assemble_universe(
+        sec_entries=sec_entries, fmp_entries=fmp_entries, now=now
+    )
+
+    n_sec = sum(1 for r in rows if r.source == "sec")
+    n_fmp_only = sum(1 for r in rows if r.source == "fmp")
+    n_delisted = sum(1 for r in rows if r.lifetime_end is not None)
+    # Structural invariant — no row may carry the forbidden sentinel
+    # (A6). assemble_universe never emits it, but assert before any write.
+    sentinel = date(1900, 1, 1)
+    n_sentinel = sum(1 for r in rows if r.lifetime_start == sentinel)
+    if n_sentinel:
+        raise RuntimeError(
+            f"universe_build: {n_sentinel} rows carry the forbidden "
+            "'1900-01-01' lifetime_start sentinel — refusing to write "
+            "(spec §3.1/A6)."
+        )
+
+    if dry_run:
+        log.info(
+            "ops.stage.universe_build.dry_run",
+            n_total=len(rows),
+            n_sec=n_sec,
+            n_fmp_only=n_fmp_only,
+            n_delisted=n_delisted,
+            sample=[{"ticker": r.ticker, "id": r.id} for r in rows[:5]],
+        )
+        return {
+            "rows_minted": 0,
+            "rows_previewed": len(rows),
+            "n_sec": n_sec,
+            "n_fmp_only": n_fmp_only,
+            "n_delisted": n_delisted,
+            "dry_run": True,
+        }
+
+    n_committed = await _insert_universe_rows(
+        pool, rows, chunk_size=chunk_size, log=log
+    )
+    log.info(
+        "ops.stage.universe_build.committed",
+        rows_minted=n_committed,
+        n_sec=n_sec,
+        n_fmp_only=n_fmp_only,
+        n_delisted=n_delisted,
+    )
+    return {
+        "rows_minted": n_committed,
+        "n_sec": n_sec,
+        "n_fmp_only": n_fmp_only,
+        "n_delisted": n_delisted,
+        "dry_run": False,
+    }
+
+
 async def _stage_classify_tickers(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -11438,6 +11761,15 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # 95% coverage check). Picks up new listings after universe
     # expansion. ETFs/SPACs/funds get flagged so catalyst + earnings
     # pipelines can filter them out.
+    # universe_build (Plan 3 Phase 1) — survivorship-free, identity-first
+    # universe minter (SEC full company list ∪ FMP symbols + delisting;
+    # TKR-14 mint; lifetime_start=FPFD, no sentinel; delisted INCLUDED).
+    # NOT in the child-first --update order (it is in _OFF_CYCLE_STAGES) —
+    # identity must be built BEFORE child loads so the 14 BEFORE INSERT
+    # triggers attribute classification_id correctly. dry_run=true default.
+    # See docs/audits/2026-06-05-identity-build-code-state.md +
+    # docs/superpowers/specs/2026-06-04-data-layer-rebuild-design.md §4/§5.
+    ("universe_build",      lambda pool, cfg: (lambda: _stage_universe_build(pool, cfg)),        HEAVY_STAGE_TIMEOUT_SEC),
     ("classify_tickers",    lambda pool, cfg: (lambda: _stage_classify_tickers(pool, cfg)),     HEAVY_STAGE_TIMEOUT_SEC),
     # OpenFIGI-driven asset_class taxonomy refinement (2026-05-30 expert review).
     # Operator-on-demand; not run on the cron path (the 4→10 mapping is a
@@ -11808,6 +12140,11 @@ KNOWN_STAGES: tuple[str, ...] = tuple(name for name, _, _ in _STAGE_SPECS)
 _OFF_CYCLE_STAGES: frozenset[str] = frozenset({
     "rebuild_from_archive",
     "dedupe_monotone",
+    # universe_build (Plan 3 Phase 1) — identity-first universe minter.
+    # Operator/orchestrator-only: it runs BEFORE child loads (NOT in the
+    # child-first daily --update order) so identity is correct-first and
+    # the BEFORE INSERT triggers attribute classification_id correctly.
+    "universe_build",
     # Wave-4 E4 deferred-AAR drain (operator-on-demand; the implicit
     # replay path runs on every engine cycle via AARWriter so this is
     # the bulk-drain knob, not the only recovery path).

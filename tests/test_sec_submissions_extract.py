@@ -130,11 +130,11 @@ def test_005_extract_filing_metadata_period_dates() -> None:
     meta = SECCompanyFactsAdapter.extract_filing_metadata(
         _submissions_for_10q(),
     )
-    # first_public_filing_date = min(reportDate) over rows where
-    # form matches the primary 10-Q. From the fixture:
-    # 10-Q reportDates: 2026-03-31, 2025-12-31, 2025-09-30, 2025-06-30
-    # → min = 2025-06-30
-    assert meta["first_public_filing_date"] == date(2025, 6, 30)
+    # FPFD = earliest filingDate across the FULL submission index (ALL
+    # forms), NOT min(reportDate) of the primary form (spec §5.5/A5).
+    # From the fixture the earliest filingDate is the 10-K filed
+    # 2024-09-15 — that's the issuer's earliest filing in the window.
+    assert meta["first_public_filing_date"] == date(2024, 9, 15)
     # last_filing_date = max(filingDate) across ALL forms. Latest is
     # the 8-K on 2026-05-20.
     assert meta["last_filing_date"] == date(2026, 5, 20)
@@ -178,9 +178,9 @@ def test_005d_empty_filings_returns_none_fields() -> None:
 
 def test_006_first_public_filing_date_NOT_from_fmp_ipo() -> None:
     """Operator hard rule: ``first_public_filing_date`` must be
-    SEC-derived (min(reportDate) over primary periodic filings), NOT
-    FMP's ``ipoDate`` field — FMP conflates SPAC-predecessor history
-    and is unreliable for IPO dating.
+    SEC-derived (earliest ``filingDate`` across the full submission
+    index — spec §5.5/A5), NOT FMP's ``ipoDate`` field — FMP conflates
+    SPAC-predecessor history and is unreliable for IPO dating.
 
     This test asserts the extractor never reads from any ``ipoDate``-
     shaped field, even if the synthetic payload smuggles one in.
@@ -189,9 +189,63 @@ def test_006_first_public_filing_date_NOT_from_fmp_ipo() -> None:
     # Inject a malicious ipoDate in 2010 — extractor must IGNORE it.
     payload["ipoDate"] = "2010-01-01"
     meta = SECCompanyFactsAdapter.extract_filing_metadata(payload)
-    # The 10-Q earliest reportDate in the fixture is 2025-06-30.
-    assert meta["first_public_filing_date"] == date(2025, 6, 30)
+    # The earliest filingDate across ALL forms in the fixture is the
+    # 10-K filed 2024-09-15 — never the smuggled ipoDate.
+    assert meta["first_public_filing_date"] == date(2024, 9, 15)
     assert meta["first_public_filing_date"].year != 2010
+
+
+def test_005e_fpfd_is_earliest_filing_date_across_all_forms() -> None:
+    """FPFD = earliest ``filingDate`` across the FULL submission index,
+    including NON-periodic forms (S-1 / 424B / 8-A), which predate the
+    first periodic report (spec §5.5/A5).
+
+    An S-1 registration filed before the first 10-Q is the issuer's
+    true first public filing — FPFD must anchor on it, not on the
+    earliest periodic-form filing.
+    """
+    payload = {
+        "fiscalYearEnd": "1231",
+        "filings": {"recent": {
+            # An S-1 (2019) + 8-A (2019) precede the first 10-Q (2020).
+            "form": ["10-Q", "10-K", "8-A12B", "S-1", "424B4"],
+            "filingDate": [
+                "2021-05-01", "2021-03-01",
+                "2019-11-10", "2019-09-01", "2019-10-15",
+            ],
+            "reportDate": [
+                "2021-03-31", "2020-12-31",
+                "2019-11-10", "2019-09-01", "2019-10-15",
+            ],
+        }},
+    }
+    meta = SECCompanyFactsAdapter.extract_filing_metadata(payload)
+    # Earliest filingDate across ALL forms is the S-1 on 2019-09-01.
+    assert meta["first_public_filing_date"] == date(2019, 9, 1)
+    # Primary periodic form is still classified correctly (10-K vs 10-Q
+    # tie → most-recent-filing tie-break picks 10-Q).
+    assert meta["document_type_primary"] == "10-Q"
+
+
+def test_005f_later_filed_earlier_period_does_not_move_fpfd() -> None:
+    """A restated/amended filing submitted LATER that reports an EARLIER
+    period must NOT pull FPFD backward (no look-ahead via reportDate).
+
+    FPFD is keyed on ``filingDate`` only — the date the entity actually
+    made the filing — so a 2026-filed 10-K/A reporting a 2018 period
+    leaves FPFD at the earliest ACTUAL filing date (2024-09-15).
+    """
+    payload = _submissions_for_10q()
+    payload["filings"]["recent"]["form"].append("10-K/A")
+    # Filed LATE (2026) but reports an OLD period (2018) — the old
+    # reportDate must be ignored; the late filingDate must not become
+    # FPFD either.
+    payload["filings"]["recent"]["filingDate"].append("2026-06-01")
+    payload["filings"]["recent"]["reportDate"].append("2018-06-30")
+    meta = SECCompanyFactsAdapter.extract_filing_metadata(payload)
+    # FPFD unchanged at the earliest ACTUAL filingDate (2024-09-15);
+    # the 2018 reportDate did NOT move it backward.
+    assert meta["first_public_filing_date"] == date(2024, 9, 15)
 
 
 def test_006b_amendment_collapses_to_base() -> None:
@@ -418,12 +472,14 @@ async def test_008d_mega_cap_fixture_computes_true_earliest_fpfd_not_recent_wind
     payload = await sec.get_submissions("0000019617", full_history=True)
     meta = SECCompanyFactsAdapter.extract_filing_metadata(payload)
 
-    # min(reportDate) over primary-form rows across merged history.
-    # Primary: 10-Q wins (3 occurrences vs 2 for 10-K).
-    # 10-Q reportDates: 2026-03-31, 1980-09-30 → min = 1980-09-30.
-    assert meta["first_public_filing_date"] == date(1980, 9, 30)
-    # The 2025-06-30 recent-shard floor is NOT returned.
-    assert meta["first_public_filing_date"] != date(2025, 6, 30)
+    # FPFD = earliest filingDate across the FULL (merged) submission
+    # index (spec §5.5/A5) — NOT min(reportDate). All filingDates:
+    # 2026-05-01, 2025-09-15, 1981-03-30, 1980-11-15 → min = 1980-11-15
+    # (the 1980 10-Q from the paginated shard). Pagination still beats
+    # the recent-shard floor — which is the point of this regression.
+    assert meta["first_public_filing_date"] == date(1980, 11, 15)
+    # The 2025-09-15 recent-shard floor is NOT returned.
+    assert meta["first_public_filing_date"] != date(2025, 9, 15)
 
 
 @pytest.mark.asyncio

@@ -248,10 +248,13 @@ def test_fpfd_repair_uses_full_bulk_history_for_jpm_style_fixture(tmp_path: Path
     assert payload is not None
 
     meta = SECCompanyFactsAdapter.extract_filing_metadata(payload)
-    # 10-Q is primary (2 vs 10-K's 1). 10-Q reportDates: 2026-03-31 +
-    # 1980-09-30 → min = 1980-09-30.
+    # FPFD = earliest filingDate across the FULL submission index
+    # (spec §5.5/A5) — the merged 1980 shard supplies the true floor.
+    # All filingDates: 2026-05-01, 1981-03-30, 1980-11-15 → min =
+    # 1980-11-15 (the 10-Q). The merged-history value beats the recent
+    # shard's 2026 floor — which is the point of this regression.
     from datetime import date
-    assert meta["first_public_filing_date"] == date(1980, 9, 30)
+    assert meta["first_public_filing_date"] == date(1980, 11, 15)
     reader.close()
 
 
