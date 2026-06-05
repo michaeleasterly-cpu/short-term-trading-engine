@@ -6828,6 +6828,601 @@ async def _stage_universe_build(
     }
 
 
+# ════════════════════════════════════════════════════════════════════════
+# issuers_build — SEC submissions → issuers + SCD-2 issuer_history
+# (Plan 3 Phase 1; spec §4/§5.3; corp-history §3.1-§3.4).
+#
+# IDENTITY-FIRST stage #2 (runs AFTER universe_build): for every distinct
+# CIK in ticker_classifications (cik NOT NULL), read the SAME bulk
+# submissions.zip universe_build used (SECSubmissionsBulkReader) and upsert
+# one issuers row (issuer_id = 'CIK'+zero-padded-10) + the SCD-2
+# issuer_history timeline (legal-name over time from formerNames).
+# ON CONFLICT (cik) idempotent — a re-run (even a year later) produces
+# ZERO new/duplicate rows.
+#
+# Review lessons applied PROACTIVELY (blocking bugs in universe_build):
+#   * trust-but-verify SEC shards — a CIK whose payload carries
+#     _shard_errors yields an UNTRUSTED FPFD (None + WARN), never a
+#     confidently-wrong early date (mirrors universe_build review #4).
+#   * date-order guard — a formerNames window with to <= from is DROPPED
+#     in the pure layer so the issuer_history valid_to>valid_from order
+#     never trips the DB.
+#   * producer hard-stop — raises if the resolvable-CIK universe is below
+#     a sane floor (degraded/empty source), never a truncated write.
+# The pure assembly lives in tpcore/identity/issuers_build.py (no
+# DB/network), exercised by tpcore/identity/tests/test_issuers_build.py.
+# ════════════════════════════════════════════════════════════════════════
+
+
+_ISSUERS_INSERT_SQL = """
+    INSERT INTO platform.issuers
+        (issuer_id, cik, legal_name, country_of_incorp,
+         status, created_at, updated_at)
+    SELECT issuer_id, cik, legal_name, country_of_incorp,
+           'active', now(), now()
+    FROM unnest(
+        $1::text[], $2::text[], $3::text[], $4::text[]
+    ) AS t(issuer_id, cik, legal_name, country_of_incorp)
+    ON CONFLICT (cik) DO NOTHING
+"""
+
+_ISSUER_HISTORY_INSERT_SQL = """
+    INSERT INTO platform.issuer_history
+        (issuer_id, cik, legal_name, valid_from, valid_to, source)
+    SELECT issuer_id, cik, legal_name, valid_from, valid_to, source
+    FROM unnest(
+        $1::text[], $2::text[], $3::text[], $4::date[], $5::date[], $6::text[]
+    ) AS t(issuer_id, cik, legal_name, valid_from, valid_to, source)
+    ON CONFLICT (issuer_id, valid_from) DO NOTHING
+"""
+
+
+async def _issuers_universe_ciks(pool: asyncpg.Pool) -> list[tuple[str, str]]:
+    """Distinct (cik, country) for every cik-bearing classification.
+
+    ``country`` is the TKR-14 pos-1-2 generated column on
+    ticker_classifications → ``issuers.country_of_incorp`` (migration
+    20260525_0000 derives country_of_incorp from the classification's
+    country). One issuer per CIK; ``min(country)`` collapses the rare
+    multi-share-class disagreement deterministically.
+    """
+    rows = await pool.fetch(
+        """
+        SELECT cik, min(country) AS country
+        FROM platform.ticker_classifications
+        WHERE cik IS NOT NULL
+        GROUP BY cik
+        ORDER BY cik
+        """
+    )
+    return [(r["cik"], r["country"]) for r in rows]
+
+
+async def _stage_issuers_build(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Build platform.issuers + SCD-2 issuer_history from SEC submissions.
+
+    Identity-first stage #2 (Plan 3 Phase 1). For every distinct CIK in
+    ticker_classifications (cik NOT NULL), reads the bulk submissions.zip
+    (SECSubmissionsBulkReader — the SAME fixed source universe_build uses)
+    and upserts one issuers row + its legal-name SCD-2 timeline.
+
+    issuer_id convention (the LIVE convention; sample CIK0000886158):
+    ``'CIK' + zero-padded-10 cik`` (tpcore.identity.issuers_build.mint_issuer_id
+    == scripts.ops._mint_issuer_id_from_cik).
+
+    Idempotency (review #2): ON CONFLICT (cik) for issuers, ON CONFLICT
+    (issuer_id, valid_from) for issuer_history — a re-run produces ZERO
+    new/duplicate rows. The natural key (cik / issuer_id) is stable, never
+    a timestamped surrogate.
+
+    Trust-but-verify SEC shards (review #4): a CIK whose payload carries
+    non-empty _shard_errors yields an UNTRUSTED FPFD (None + WARN), not a
+    confidently-wrong early date.
+
+    Producer hard-stop (review #3): raises if fewer than ``min_resolved``
+    of the universe CIKs resolved an issuers row (degraded/empty bulk file)
+    — never a silently-truncated write.
+
+    Knobs (``--param key=value``):
+      * ``dry_run`` (default True) — assemble + report counts, no INSERT.
+      * ``chunk_size`` (default 5000) — INSERT batch size.
+      * ``min_resolved`` (default 1) — hard-stop floor on resolved issuers.
+      * ``max_ciks`` (default 0 = no cap) — smoke-run limit.
+    """
+    cfg = cfg or {}
+    log = structlog.get_logger("ops.stage.issuers_build")
+    dry_run = _stage_param_to_bool(cfg.get("dry_run", True))
+    chunk_size = int(cfg.get("chunk_size", 5_000))
+    min_resolved = int(cfg.get("min_resolved", 1))
+    max_ciks = int(cfg.get("max_ciks", 0))
+
+    from tpcore.identity.issuers_build import assemble_issuer  # noqa: PLC0415
+    from tpcore.sec.companyfacts_adapter import (  # noqa: PLC0415
+        SECCompanyFactsAdapter,
+    )
+    from tpcore.sec.submissions_bulk_reader import (  # noqa: PLC0415
+        SECSubmissionsBulkReader,
+        ensure_zip_cached,
+    )
+
+    user_agent = os.environ.get("SEC_EDGAR_USER_AGENT")
+    if not user_agent:
+        raise RuntimeError(
+            "issuers_build: SEC_EDGAR_USER_AGENT is required for the SEC "
+            "submissions pull."
+        )
+
+    universe = await _issuers_universe_ciks(pool)
+    if max_ciks > 0:
+        universe = universe[:max_ciks]
+    n_universe = len(universe)
+    if n_universe == 0:
+        raise RuntimeError(
+            "issuers_build: 0 cik-bearing classifications — run universe_build "
+            "first (identity-first order; review #3 producer hard-stop)."
+        )
+
+    await ensure_zip_cached(user_agent=user_agent)
+
+    issuer_rows: list[Any] = []
+    history_rows: list[Any] = []
+    n_untrusted_fpfd = 0
+    n_skipped = 0
+    with SECSubmissionsBulkReader() as reader:
+        for cik, country in universe:
+            payload = reader.get_merged_submissions(cik)
+            if payload is None:
+                n_skipped += 1
+                continue
+            fpfd: date | None = None
+            if payload.get("_shard_errors"):
+                # Untrusted FPFD: a missing oldest shard pulls min(filingDate)
+                # forward (look-ahead). None + WARN, never a wrong early date.
+                n_untrusted_fpfd += 1
+                log.warning(
+                    "ops.stage.issuers_build.sec_fpfd_untrusted",
+                    cik=cik,
+                    shard_errors=payload.get("_shard_errors"),
+                )
+            else:
+                meta = SECCompanyFactsAdapter.extract_filing_metadata(payload)
+                fpfd = meta.get("first_public_filing_date")
+            sec_type = _issuer_primary_form(payload)
+            issuer, history = assemble_issuer(
+                cik=cik,
+                payload=payload,
+                fpfd=fpfd,
+                sec_document_type_primary=sec_type,
+                country_of_incorp=country,
+            )
+            if issuer is None:
+                n_skipped += 1
+                continue
+            issuer_rows.append(issuer)
+            history_rows.extend(history)
+        stats = reader.stats()
+
+    n_resolved = len(issuer_rows)
+    log.info(
+        "ops.stage.issuers_build.assembled",
+        n_universe=n_universe,
+        n_resolved=n_resolved,
+        n_history_rows=len(history_rows),
+        n_untrusted_fpfd=n_untrusted_fpfd,
+        n_skipped=n_skipped,
+        **stats,
+    )
+    # Producer hard-stop (review #3): a degraded/empty bulk file would
+    # silently resolve ~0 issuers, leaving every cik-bearing classification
+    # orphaned at the identity gate. Refuse a truncated write.
+    if n_resolved < min_resolved:
+        raise RuntimeError(
+            f"issuers_build: only {n_resolved} issuers resolved from "
+            f"{n_universe} universe CIKs — below the {min_resolved} floor "
+            "(degraded/empty submissions.zip). Refusing a truncated write "
+            "(review #3)."
+        )
+
+    if dry_run:
+        log.info(
+            "ops.stage.issuers_build.dry_run",
+            n_issuers=n_resolved,
+            n_history_rows=len(history_rows),
+            sample=[
+                {"issuer_id": r.issuer_id, "legal_name": r.legal_name}
+                for r in issuer_rows[:5]
+            ],
+        )
+        return {
+            "issuers_upserted": 0,
+            "issuers_previewed": n_resolved,
+            "history_previewed": len(history_rows),
+            "n_untrusted_fpfd": n_untrusted_fpfd,
+            "n_skipped": n_skipped,
+            "dry_run": True,
+        }
+
+    n_issuers = await _insert_issuer_rows(
+        pool, issuer_rows, history_rows, chunk_size=chunk_size, log=log
+    )
+    log.info(
+        "ops.stage.issuers_build.committed",
+        issuers_upserted=n_issuers,
+        history_rows=len(history_rows),
+    )
+    return {
+        "issuers_upserted": n_issuers,
+        "history_rows": len(history_rows),
+        "n_untrusted_fpfd": n_untrusted_fpfd,
+        "n_skipped": n_skipped,
+        "dry_run": False,
+    }
+
+
+def _issuer_primary_form(payload: dict[str, Any]) -> str | None:
+    """Most frequent SEC form in the merged recent filings → the issuer's
+    primary document type (10-K filer vs 485BPOS fund, etc.). None when no
+    forms are present (no guessing)."""
+    filings = payload.get("filings") or {}
+    recent = filings.get("recent") or {}
+    forms = recent.get("form") or []
+    if not isinstance(forms, list) or not forms:
+        return None
+    counts: dict[str, int] = {}
+    for f in forms:
+        if isinstance(f, str) and f:
+            counts[f] = counts.get(f, 0) + 1
+    if not counts:
+        return None
+    # Deterministic tie-break: highest count, then lexicographic.
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+
+
+async def _insert_issuer_rows(
+    pool: asyncpg.Pool,
+    issuer_rows: list[Any],
+    history_rows: list[Any],
+    *,
+    chunk_size: int,
+    log: Any,
+) -> int:
+    """Chunked idempotent upsert of issuers + issuer_history.
+
+    Issuers commit first (issuer_history.issuer_id FK references them), then
+    the SCD-2 history. ON CONFLICT (cik) / (issuer_id, valid_from) make
+    re-runs idempotent (review #2)."""
+    n_committed = 0
+    async with pool.acquire() as conn:
+        for start in range(0, len(issuer_rows), chunk_size):
+            chunk = issuer_rows[start : start + chunk_size]
+            await conn.execute(
+                _ISSUERS_INSERT_SQL,
+                [r.issuer_id for r in chunk],
+                [r.cik for r in chunk],
+                [r.legal_name for r in chunk],
+                [r.country_of_incorp for r in chunk],
+            )
+            n_committed += len(chunk)
+            log.info(
+                "ops.stage.issuers_build.issuers_chunk",
+                chunk_start=start,
+                chunk_rows=len(chunk),
+            )
+        for start in range(0, len(history_rows), chunk_size):
+            chunk = history_rows[start : start + chunk_size]
+            await conn.execute(
+                _ISSUER_HISTORY_INSERT_SQL,
+                [r.issuer_id for r in chunk],
+                [r.cik for r in chunk],
+                [r.legal_name for r in chunk],
+                [r.valid_from for r in chunk],
+                [r.valid_to for r in chunk],
+                [r.source for r in chunk],
+            )
+            log.info(
+                "ops.stage.issuers_build.history_chunk",
+                chunk_start=start,
+                chunk_rows=len(chunk),
+            )
+    return n_committed
+
+
+# ════════════════════════════════════════════════════════════════════════
+# ticker_history_reuse_build — ticker_classifications lifetimes → SCD-2
+# ticker_history (Plan 3 Phase 1; spec §4/§5.3; invariant G3).
+#
+# IDENTITY-FIRST stage #3: DERIVE one ticker_history row per classification
+# from its lifetime — a delisted-then-reused ticker gets MULTIPLE contiguous
+# rows (G3). The half-open '[)' EXCLUDE constraint enforces no-overlap; the
+# pure layer hard-stops on a true overlap (a surfaced defect, not mangled).
+# ON CONFLICT (classification_id, valid_from) idempotent.
+# Pure derivation: tpcore/identity/ticker_history_reuse_build.py.
+# ════════════════════════════════════════════════════════════════════════
+
+
+_TICKER_HISTORY_INSERT_SQL = """
+    INSERT INTO platform.ticker_history
+        (classification_id, ticker, valid_from, valid_to)
+    SELECT classification_id, ticker, valid_from, valid_to
+    FROM unnest(
+        $1::text[], $2::text[], $3::date[], $4::date[]
+    ) AS t(classification_id, ticker, valid_from, valid_to)
+    ON CONFLICT (classification_id, valid_from) DO NOTHING
+"""
+
+
+async def _stage_ticker_history_reuse_build(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Derive platform.ticker_history (SCD-2) from classification lifetimes.
+
+    Identity-first stage #3 (Plan 3 Phase 1; G3 reuse). For each ticker,
+    its classifications are ordered by lifetime_start and emitted one
+    ticker_history row each — a delisted-then-reused ticker gets MULTIPLE
+    contiguous rows. The half-open [valid_from, valid_to) EXCLUDE
+    constraint enforces no-overlap; the pure layer HARD-STOPS on a true
+    overlap (a surfaced data defect, never silently mangled).
+
+    Idempotency: ON CONFLICT (classification_id, valid_from) DO NOTHING —
+    a re-run produces ZERO new/duplicate rows.
+
+    Knobs (``--param key=value``):
+      * ``dry_run`` (default True) — derive + report counts, no INSERT.
+      * ``chunk_size`` (default 50000) — INSERT batch size.
+    """
+    cfg = cfg or {}
+    log = structlog.get_logger("ops.stage.ticker_history_reuse_build")
+    dry_run = _stage_param_to_bool(cfg.get("dry_run", True))
+    chunk_size = int(cfg.get("chunk_size", 50_000))
+
+    from tpcore.identity.ticker_history_reuse_build import (  # noqa: PLC0415
+        ClassificationLifetime,
+        derive_ticker_history,
+    )
+
+    rows = await pool.fetch(
+        """
+        SELECT id AS classification_id, current_ticker AS ticker,
+               lifetime_start, lifetime_end
+        FROM platform.ticker_classifications
+        WHERE id IS NOT NULL AND current_ticker IS NOT NULL
+          AND lifetime_start IS NOT NULL
+        ORDER BY current_ticker, lifetime_start
+        """
+    )
+    lifetimes = [
+        ClassificationLifetime(
+            classification_id=r["classification_id"],
+            ticker=r["ticker"],
+            lifetime_start=r["lifetime_start"],
+            lifetime_end=r["lifetime_end"],
+        )
+        for r in rows
+    ]
+    # derive_ticker_history HARD-STOPS (ValueError) on a true overlap — a
+    # data defect the EXCLUDE constraint would reject; surface it.
+    history = derive_ticker_history(lifetimes)
+    log.info(
+        "ops.stage.ticker_history_reuse_build.derived",
+        n_classifications=len(lifetimes),
+        n_rows=len(history),
+    )
+
+    if dry_run:
+        return {
+            "rows_previewed": len(history),
+            "n_classifications": len(lifetimes),
+            "dry_run": True,
+        }
+
+    n_committed = 0
+    async with pool.acquire() as conn:
+        for start in range(0, len(history), chunk_size):
+            chunk = history[start : start + chunk_size]
+            await conn.execute(
+                _TICKER_HISTORY_INSERT_SQL,
+                [r.classification_id for r in chunk],
+                [r.ticker for r in chunk],
+                [r.valid_from for r in chunk],
+                [r.valid_to for r in chunk],
+            )
+            n_committed += len(chunk)
+            log.info(
+                "ops.stage.ticker_history_reuse_build.chunk",
+                chunk_start=start,
+                chunk_rows=len(chunk),
+            )
+    log.info(
+        "ops.stage.ticker_history_reuse_build.committed",
+        rows_inserted=n_committed,
+    )
+    return {
+        "rows_inserted": n_committed,
+        "n_classifications": len(lifetimes),
+        "dry_run": False,
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# issuer_securities_build — ticker_classifications → issuer_securities
+# (Plan 3 Phase 1; spec §4/§5.3). M:N fan-out: GOOG/GOOGL under one issuer.
+# ON CONFLICT (issuer_id, classification_id, valid_from) idempotent.
+# Pure derivation: tpcore/identity/issuer_securities_build.py.
+# ════════════════════════════════════════════════════════════════════════
+
+
+_ISSUER_SECURITIES_INSERT_SQL = """
+    INSERT INTO platform.issuer_securities
+        (issuer_id, classification_id, valid_from, valid_to)
+    SELECT issuer_id, classification_id, valid_from, valid_to
+    FROM unnest(
+        $1::text[], $2::text[], $3::date[], $4::date[]
+    ) AS t(issuer_id, classification_id, valid_from, valid_to)
+    ON CONFLICT (issuer_id, classification_id, valid_from) DO NOTHING
+"""
+
+
+async def _stage_issuer_securities_build(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Build platform.issuer_securities (M:N issuer↔security fan-out).
+
+    Identity-first stage #4 (Plan 3 Phase 1). For each cik-bearing
+    classification, link (issuer_id=mint_issuer_id(cik), classification_id,
+    valid_from=lifetime_start) — two share classes under one CIK
+    (GOOG/GOOGL) fan out to the SAME issuer. cik-NULL (FMP-only) rows are
+    skipped (no SEC issuer to link → FK safety).
+
+    Idempotency: ON CONFLICT (issuer_id, classification_id, valid_from) DO
+    NOTHING — a re-run produces ZERO new/duplicate rows.
+
+    Knobs (``--param key=value``):
+      * ``dry_run`` (default True) — derive + report counts, no INSERT.
+      * ``chunk_size`` (default 50000) — INSERT batch size.
+    """
+    cfg = cfg or {}
+    log = structlog.get_logger("ops.stage.issuer_securities_build")
+    dry_run = _stage_param_to_bool(cfg.get("dry_run", True))
+    chunk_size = int(cfg.get("chunk_size", 50_000))
+
+    from tpcore.identity.issuer_securities_build import (  # noqa: PLC0415
+        SecurityWithCik,
+        derive_issuer_securities,
+    )
+
+    rows = await pool.fetch(
+        """
+        SELECT id AS classification_id, cik, lifetime_start, lifetime_end
+        FROM platform.ticker_classifications
+        WHERE id IS NOT NULL AND cik IS NOT NULL
+          AND lifetime_start IS NOT NULL
+        ORDER BY cik, id
+        """
+    )
+    securities = [
+        SecurityWithCik(
+            classification_id=r["classification_id"],
+            cik=r["cik"],
+            lifetime_start=r["lifetime_start"],
+            lifetime_end=r["lifetime_end"],
+        )
+        for r in rows
+    ]
+    links = derive_issuer_securities(securities)
+    log.info(
+        "ops.stage.issuer_securities_build.derived",
+        n_securities=len(securities),
+        n_links=len(links),
+    )
+
+    if dry_run:
+        return {
+            "links_previewed": len(links),
+            "n_securities": len(securities),
+            "dry_run": True,
+        }
+
+    n_committed = 0
+    async with pool.acquire() as conn:
+        for start in range(0, len(links), chunk_size):
+            chunk = links[start : start + chunk_size]
+            await conn.execute(
+                _ISSUER_SECURITIES_INSERT_SQL,
+                [r.issuer_id for r in chunk],
+                [r.classification_id for r in chunk],
+                [r.valid_from for r in chunk],
+                [r.valid_to for r in chunk],
+            )
+            n_committed += len(chunk)
+            log.info(
+                "ops.stage.issuer_securities_build.chunk",
+                chunk_start=start,
+                chunk_rows=len(chunk),
+            )
+    log.info(
+        "ops.stage.issuer_securities_build.committed",
+        links_inserted=n_committed,
+    )
+    return {
+        "links_inserted": n_committed,
+        "n_securities": len(securities),
+        "dry_run": False,
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════
+# identity_build — the identity-first orchestrator (Plan 3 Phase 1.4).
+#
+# Runs the four identity stages IN ORDER, fail-fast:
+#   universe_build → issuers_build → ticker_history_reuse_build →
+#   issuer_securities_build
+# then runs the BLOCKING identity gate (tpcore.identity.identity_gate) —
+# the substrate must be internally consistent before any child load. The
+# coordinator runs the live ingest; this orchestrator is the single entry.
+# scripts/run_identity_build.sh wraps it (no-orphan-scripts).
+# ════════════════════════════════════════════════════════════════════════
+
+
+_IDENTITY_BUILD_ORDER: tuple[str, ...] = (
+    "universe_build",
+    "issuers_build",
+    "ticker_history_reuse_build",
+    "issuer_securities_build",
+)
+
+
+async def _stage_identity_build(
+    pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Identity-first orchestrator (Plan 3 Phase 1.4).
+
+    Runs the four identity stages IN ORDER (universe_build → issuers_build →
+    ticker_history_reuse_build → issuer_securities_build), fail-fast, then
+    the BLOCKING identity gate. Every knob is forwarded to each sub-stage
+    (e.g. ``--param dry_run=false``); the gate runs only on a live
+    (non-dry-run) build because a dry-run writes nothing to check.
+
+    The identity substrate must be internally consistent BEFORE any child
+    load (prices / fundamentals / lifecycle) — the gate is the Phase-1.4
+    gate the coordinator depends on (identity-path rule).
+    """
+    cfg = cfg or {}
+    log = structlog.get_logger("ops.stage.identity_build")
+    dry_run = _stage_param_to_bool(cfg.get("dry_run", True))
+
+    from tpcore.identity.identity_gate import (  # noqa: PLC0415
+        evaluate_identity_gate,
+    )
+
+    stage_fns = {
+        "universe_build": _stage_universe_build,
+        "issuers_build": _stage_issuers_build,
+        "ticker_history_reuse_build": _stage_ticker_history_reuse_build,
+        "issuer_securities_build": _stage_issuer_securities_build,
+    }
+    results: dict[str, Any] = {}
+    for name in _IDENTITY_BUILD_ORDER:
+        log.info("ops.stage.identity_build.running", sub_stage=name)
+        results[name] = await stage_fns[name](pool, cfg)
+
+    gate: dict[str, Any] | None = None
+    if not dry_run:
+        # BLOCKING: raise_on_fail aborts the orchestrator (and therefore the
+        # coordinator's child loads) on an inconsistent substrate.
+        gate_result = await evaluate_identity_gate(pool, raise_on_fail=True)
+        gate = {
+            "passed": gate_result.passed,
+            "violations": gate_result.violations,
+        }
+        log.info("ops.stage.identity_build.gate_passed", **gate)
+    else:
+        log.info("ops.stage.identity_build.gate_skipped_dry_run")
+
+    return {"sub_stages": results, "identity_gate": gate, "dry_run": dry_run}
+
+
 async def _stage_classify_tickers(
     pool: asyncpg.Pool, cfg: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -11980,6 +12575,22 @@ _STAGE_SPECS: tuple[tuple[str, callable, float], ...] = (
     # See docs/audits/2026-06-05-identity-build-code-state.md +
     # docs/superpowers/specs/2026-06-04-data-layer-rebuild-design.md §4/§5.
     ("universe_build",      lambda pool, cfg: (lambda: _stage_universe_build(pool, cfg)),        HEAVY_STAGE_TIMEOUT_SEC),
+    # Identity-first stages #2-#4 (Plan 3 Phase 1) — issuers + SCD-2
+    # issuer_history (issuers_build), ticker_history reuse derivation
+    # (ticker_history_reuse_build, G3), and the M:N issuer↔security fan-out
+    # (issuer_securities_build). All OFF-CYCLE: they run BEFORE child loads
+    # via the identity_build orchestrator (or explicit --stage). The
+    # orchestrator (_stage_identity_build) runs the four IN ORDER + the
+    # BLOCKING identity gate. dry_run=true default. See
+    # docs/superpowers/specs/2026-06-04-data-layer-rebuild-design.md §4/§5.3.
+    ("issuers_build",       lambda pool, cfg: (lambda: _stage_issuers_build(pool, cfg)),         HEAVY_STAGE_TIMEOUT_SEC),
+    ("ticker_history_reuse_build",
+        lambda pool, cfg: (lambda: _stage_ticker_history_reuse_build(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
+    ("issuer_securities_build",
+        lambda pool, cfg: (lambda: _stage_issuer_securities_build(pool, cfg)),
+        HEAVY_STAGE_TIMEOUT_SEC),
+    ("identity_build",      lambda pool, cfg: (lambda: _stage_identity_build(pool, cfg)),        HEAVY_STAGE_TIMEOUT_SEC),
     ("classify_tickers",    lambda pool, cfg: (lambda: _stage_classify_tickers(pool, cfg)),     HEAVY_STAGE_TIMEOUT_SEC),
     # OpenFIGI-driven asset_class taxonomy refinement (2026-05-30 expert review).
     # Operator-on-demand; not run on the cron path (the 4→10 mapping is a
@@ -12355,6 +12966,13 @@ _OFF_CYCLE_STAGES: frozenset[str] = frozenset({
     # child-first daily --update order) so identity is correct-first and
     # the BEFORE INSERT triggers attribute classification_id correctly.
     "universe_build",
+    # Identity-first stages #2-#4 + orchestrator (Plan 3 Phase 1) — all
+    # off-cycle for the SAME reason: identity must be built BEFORE child
+    # loads, so they never ride the child-first daily --update cadence.
+    "issuers_build",
+    "ticker_history_reuse_build",
+    "issuer_securities_build",
+    "identity_build",
     # Wave-4 E4 deferred-AAR drain (operator-on-demand; the implicit
     # replay path runs on every engine cycle via AARWriter so this is
     # the bulk-drain knob, not the only recovery path).
