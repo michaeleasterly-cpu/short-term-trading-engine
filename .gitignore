@@ -116,3 +116,6 @@ publishing/stelib/*.egg-info/
 # describing. ~1.3 GB for the full delisted+inactive cohort; never
 # committed. TP_DATA_DIR override is supported.
 data/sec_submissions/
+
+# Plan 2 PRESERVE-class snapshot CSVs (operational data, not source)
+data/rebuild_*/preserve/
