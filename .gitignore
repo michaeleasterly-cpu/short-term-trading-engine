@@ -119,3 +119,4 @@ data/sec_submissions/
 
 # Plan 2 PRESERVE-class snapshot CSVs (operational data, not source)
 data/rebuild_*/preserve/
+data/rebuild_*/ticker_graph_snapshot/
