@@ -358,8 +358,8 @@ def test_audit_checks_cover_every_dependent_table(ops_module):
     ops = ops_module
     expected_tables = {
         "earnings_events", "corporate_actions", "fundamentals_quarterly",
-        "liquidity_tiers", "universe_candidates", "tradier_options_chains",
-    }
+        "liquidity_tiers", "universe_candidates",
+    }  # tradier_options_chains dropped (Tradier closed, Plan 2 migration 20260604_0300)
     audited = {
         table for table, check, _ in ops._AUDIT_CHECKS  # noqa: SLF001
         if check == "ticker_not_in_prices"
@@ -368,11 +368,11 @@ def test_audit_checks_cover_every_dependent_table(ops_module):
     assert not missing, f"missing ticker_not_in_prices for: {missing}"
 
 
-def test_audit_includes_freshness_and_expiry_checks(ops_module):
+def test_audit_includes_freshness_checks(ops_module):
     ops = ops_module
     by_kind = {(t, c) for t, c, _ in ops._AUDIT_CHECKS}  # noqa: SLF001
-    # The historical pain points — keep these wired.
-    assert ("tradier_options_chains", "expired") in by_kind
+    # The historical pain point — keep wired. (The tradier_options_chains
+    # 'expired' check was removed with the table — Plan 2, Tradier closed.)
     assert ("liquidity_tiers", "stale_30d") in by_kind
 
 
