@@ -7,12 +7,12 @@
  * sectors with regional demand to local training pipelines.
  */
 import { DashboardHead, Topbar, DashboardFooter, DEFAULT_FOOTER_COLUMNS } from "@/components/dashboard-chrome";
+import { getMantraconData } from "@/lib/regional-data";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || "https://console-api-production-4576.up.railway.app";
+// Self-fetching: regional data layer runs in Vercel (FRED + Census ACS + BLS
+// QCEW + USAspending), no console-api / Railway. Daily ISR cache. Faithful TS
+// port of console-api public_mantracon() — 5-county LWA-25 aggregate.
+export const revalidate = 86400;
 
 interface BusinessOps {
   top_awards: Array<{
@@ -3798,9 +3798,7 @@ function LaborTruthSection({ lt }: { lt: LaborTruth }) {
 
 async function fetchData(): Promise<PageData | null> {
   try {
-    const res = await fetch(`${API_BASE}/api/public/mantracon`, { cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as PageData;
+    return (await getMantraconData()) as unknown as PageData;
   } catch {
     return null;
   }

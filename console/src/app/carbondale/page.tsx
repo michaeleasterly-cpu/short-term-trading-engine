@@ -9,12 +9,11 @@
  * behind the same /api/public/carbondale endpoint.
  */
 import { DashboardHead, Topbar, DashboardFooter, DEFAULT_FOOTER_COLUMNS } from "@/components/dashboard-chrome";
+import { getCarbondaleData, type CarbondaleData as RegionalCarbondaleData } from "@/lib/regional-data";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || "https://console-api-production-4576.up.railway.app";
+// Self-fetching daily-cached data layer (no console-api). A Vercel cron may
+// force a fresh pull; otherwise the prerender refreshes every 24h.
+export const revalidate = 86400;
 
 interface BusinessOps {
   top_awards: Array<{
@@ -150,18 +149,11 @@ function LaborTruthCitySection({ lt, cityShortName }: { lt: LaborTruth; cityShor
   );
 }
 
-interface CarbondaleData {
-  ts: string;
-  indicators: Record<string, { value: number; date: string }>;
-  unemployment_series: Array<{ date: string; value: number }>;
-  labor_force_series: Array<{ date: string; value: number }>;
-  business_opportunities?: BusinessOps;
-  industry_mix?: IndustryMix;
-  city_demographics?: CityDemographics;
-  demographics_trend?: DemographicsTrend;
-  health_score?: HealthScore;
-  labor_truth?: LaborTruth;
-}
+// The page renders the regional-data-layer payload directly. The local
+// section-component interfaces above (BusinessOps, IndustryMix, CityDemographics,
+// DemographicsTrend, HealthScore, LaborTruth) are structurally satisfied by the
+// lib's exported types.
+type CarbondaleData = RegionalCarbondaleData;
 
 function labelColor(label: string): { fg: string; bg: string } {
   switch (label) {
@@ -511,9 +503,7 @@ function BusinessLeadsBlock({ b }: { b: BusinessOps }) {
 
 async function fetchCarbondale(): Promise<CarbondaleData | null> {
   try {
-    const res = await fetch(`${API_BASE}/api/public/carbondale`, { cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as CarbondaleData;
+    return await getCarbondaleData();
   } catch {
     return null;
   }

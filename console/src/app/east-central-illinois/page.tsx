@@ -7,20 +7,21 @@
  * Counties: Clark, Clay, Coles, Crawford, Cumberland, Edgar, Effingham,
  * Fayette, Jasper, Lawrence, Marion, Moultrie, Richland.
  *
- * Live data substrate: /api/public/cefs (13-county aggregate UR + labor
- * force + USAspending awards + QCEW industry mix + ACS labor truth, all
- * pulled from platform.macro_data + Census/USAspending APIs). FRED panel:
- * 170 series, 4,041 rows loaded 2026-05-28.
+ * Live data substrate: self-fetching via getCefsData() (@/lib/regional-data),
+ * a faithful TS port of console-api public_cefs() — 13-county aggregate UR
+ * (labor-force-weighted) + labor force (summed) computed in-process from the
+ * per-county FRED UR/LF series, plus USAspending awards + QCEW industry mix
+ * (with by_county) + ACS labor truth across all 13 counties. No console-api /
+ * Railway dependency; daily ISR cache (revalidate = 86400).
  *
  * Charleston city profile: /charleston (mirrors /carbondale).
  */
 import { DashboardHead, Topbar, DashboardFooter, DEFAULT_FOOTER_COLUMNS } from "@/components/dashboard-chrome";
+import { getCefsData, type CefsData as RegionalCefsData } from "@/lib/regional-data";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || "https://console-api-production-4576.up.railway.app";
+// Self-fetching: regional data layer runs in Vercel (FRED + Census ACS + BLS
+// QCEW + USAspending), no console-api. Daily ISR cache.
+export const revalidate = 86400;
 
 interface IndustryRow {
   code: string; name: string;
@@ -64,27 +65,14 @@ interface LaborTruth {
 interface TopFedRecipient {
   recipient: string; agency: string; amount: number; awards_count: number;
 }
-interface CEFSData {
-  ts: string;
-  indicators: Record<string, { value: number; date: string }>;
-  lwa_aggregate: {
-    labor_force: number | null; labor_force_date: string | null;
-    unemployment_rate_weighted: number | null; unemployment_rate_date: string | null;
-    county_count: number;
-  };
-  lwa_labor_force_series: Array<{ date: string; value: number }>;
-  lwa_unemployment_series: Array<{ date: string; value: number }>;
-  business_opportunities?: BusinessOps;
-  top_federal_recipients?: TopFedRecipient[];
-  industry_mix?: IndustryMix;
-  labor_truth?: LaborTruth;
-}
+// The page's data contract is the regional-data CefsData shape (faithful port of
+// console-api `public_cefs()`). The local sub-interfaces above document the field
+// shapes inline; the canonical type comes from the self-fetching data layer.
+type CEFSData = RegionalCefsData;
 
 async function fetchCEFS(): Promise<CEFSData | null> {
   try {
-    const res = await fetch(`${API_BASE}/api/public/cefs`, { cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as CEFSData;
+    return await getCefsData();
   } catch { return null; }
 }
 

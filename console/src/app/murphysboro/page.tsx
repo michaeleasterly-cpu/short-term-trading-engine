@@ -7,12 +7,11 @@
  * (recipient_city=MURPHYSBORO) layered over the county-wide context.
  */
 import { DashboardHead, Topbar, DashboardFooter, DEFAULT_FOOTER_COLUMNS } from "@/components/dashboard-chrome";
+import { getMurphysboroData, type MurphysboroData as RegionalMurphysboroData } from "@/lib/regional-data";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || "https://console-api-production-4576.up.railway.app";
+// Self-fetching daily-cached data layer (no console-api). A Vercel cron may
+// force a fresh pull; otherwise the prerender refreshes every 24h.
+export const revalidate = 86400;
 
 interface BusinessOps {
   top_awards: Array<{
@@ -225,18 +224,11 @@ function HealthScoreSection({ health, cityShortName }: { health: HealthScore; ci
   );
 }
 
-interface MurphysboroData {
-  ts: string;
-  indicators: Record<string, { value: number; date: string }>;
-  unemployment_series: Array<{ date: string; value: number }>;
-  business_opportunities_city: BusinessOps;
-  business_opportunities_county: BusinessOps;
-  industry_mix?: IndustryMix;
-  city_demographics?: CityDemographics;
-  demographics_trend?: DemographicsTrend;
-  health_score?: HealthScore;
-  labor_truth?: LaborTruth;
-}
+// The page renders the regional-data-layer payload directly. The local
+// section-component interfaces above (BusinessOps, IndustryMix, CityDemographics,
+// DemographicsTrend, HealthScore, LaborTruth) are structurally satisfied by the
+// lib's exported types.
+type MurphysboroData = RegionalMurphysboroData;
 
 const TREND_GOOD_UP = new Set(["population", "median_household_income"]);
 const TREND_GOOD_DOWN = new Set(["poverty_rate_families", "acs_unemployment_rate"]);
@@ -413,9 +405,7 @@ function IndustryMixSection({ mix, scope }: { mix: IndustryMix; scope: string })
 
 async function fetchData(): Promise<MurphysboroData | null> {
   try {
-    const res = await fetch(`${API_BASE}/api/public/murphysboro`, { cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as MurphysboroData;
+    return await getMurphysboroData();
   } catch {
     return null;
   }
