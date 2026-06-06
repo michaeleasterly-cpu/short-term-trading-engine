@@ -401,77 +401,160 @@ function buildSections(d: MarketHealth): Section[] {
   ].filter(s => s.cards.length > 0);
 }
 
-// Section tiering — only hard recession + financial-stress data drive the
-// top "weather" headline (see topHeadline). Soft / sentiment / policy data,
-// valuation, and breadth each get their own treatment because they are
-// news-driven or backdrop/timing signals, not standalone recession predictors
-// (Curtin 2007; Baker-Bloom-Davis 2016).
+// ── Research-weighted composite "How is the US market today?" score ─────────
+// Replaces the prior crude flag-count headline. Each indicator → a 0-100 RISK
+// sub-score (100 = max risk) via linear interpolation within published
+// reference bands, clamped. CORE is a weighted mean of macro/credit risk
+// sub-scores; valuation acts as a bounded MULTIPLIER (never a standalone driver);
+// timing (VIX + breadth) and sentiment apply bounded ± point overlays. The
+// ×multiplier + caps structurally prevent valuation/sentiment alone from
+// producing a high band. Glass-box: every input + weight + band is shown.
 
-interface TopHeadline {
-  headline: string;
-  subhead: string;
+// Piecewise-linear interpolation across (input → risk) anchor points, clamped
+// 0-100. Anchors must be monotonic in the input; handles both ascending and
+// descending (inverted) inputs.
+function interp(x: number, anchors: Array<[number, number]>): number {
+  const asc = anchors[0][0] < anchors[anchors.length - 1][0];
+  const pts = asc ? anchors : [...anchors].reverse(); // ensure ascending input
+  if (x <= pts[0][0]) return Math.max(0, Math.min(100, pts[0][1]));
+  if (x >= pts[pts.length - 1][0]) return Math.max(0, Math.min(100, pts[pts.length - 1][1]));
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [x0, y0] = pts[i];
+    const [x1, y1] = pts[i + 1];
+    if (x >= x0 && x <= x1) {
+      const f = x1 === x0 ? 0 : (x - x0) / (x1 - x0);
+      return Math.max(0, Math.min(100, y0 + f * (y1 - y0)));
+    }
+  }
+  return 50;
+}
+const clamp01_100 = (x: number) => Math.max(0, Math.min(100, x));
+
+// Each entry: human label, the card key whose name we surface as a contributor,
+// and the risk sub-score for today's value (or null if the input is missing).
+interface SubScore { key: string; label: string; risk: number; }
+
+interface Composite {
+  score: number;             // 0-100, final clamped composite
+  band: string;              // Calm / Mostly clear / Mixed / Cloudy / Stormy
   tone: Tone;
-  weatherWord: string;
-  t1Stress: number;
-  t1Watch: number;
-  t1Total: number;
-  t2Stress: number;
-  t2Watch: number;
+  core: number;              // weighted-mean macro/credit risk (the big driver)
+  valMult: number;          // valuation multiplier (0.85-1.15)
+  valSub: number;           // mean valuation risk sub-score
+  timing: number;            // ± pts from VIX + breadth
+  sentiment: number;         // ± pts from sentiment tilt
+  topContributors: string[]; // 2-3 card names driving the read, by name
+  subhead: string;
 }
 
-function topHeadline(sections: Section[]): TopHeadline {
-  const cardsIn = (ids: string[]) => sections.filter(s => ids.includes(s.id)).flatMap(s => s.cards);
-  // Hard recession + credit data drives the "weather". Valuation = backdrop
-  // (how expensive, not when). Breadth = timing/participation caution.
-  // Sentiment/policy = soft note. Each gets its OWN treatment so the new
-  // valuation/breadth cards aren't mislabeled as "sentiment".
-  const tier1 = cardsIn(["recession", "credit"]);
-  const valuation = cardsIn(["valuation"]);
-  const breadthCards = cardsIn(["breadth"]);
-  const soft = cardsIn(["consumer"]);
+function bandFor(score: number): { band: string; tone: Tone } {
+  if (score <= 20) return { band: "Calm", tone: "calm" };
+  if (score <= 40) return { band: "Mostly clear", tone: "ok" };
+  if (score <= 60) return { band: "Mixed", tone: "watch" };
+  if (score <= 80) return { band: "Cloudy", tone: "watch" };
+  return { band: "Stormy", tone: "stress" };
+}
 
-  const t1Stress = tier1.filter(c => c.tone === "stress").length;
-  const t1Watch  = tier1.filter(c => c.tone === "watch").length;
-  const t1Total  = tier1.length;
-  const t2Stress = soft.filter(c => c.tone === "stress").length;
-  const t2Watch  = soft.filter(c => c.tone === "watch").length;
+function computeComposite(d: MarketHealth): Composite {
+  const ind = d.indicators;
+  const v = (k: string): number | undefined => ind[k]?.value;
 
-  // Valuation backdrop — stronger when BOTH CAPE and Buffett are stretched.
-  const valStretched = valuation.filter(c => c.tone === "stress" || c.tone === "watch").length;
-  const valNote = valStretched >= 2
-    ? " Valuations are historically stretched on both CAPE and the Buffett Indicator — a backdrop that raises the stakes, though it says nothing about timing."
-    : valStretched === 1
-      ? " Valuations are on the expensive side — a backdrop, not a timing signal."
-      : "";
-  // Breadth caution — participation/timing the valuation tools can't give.
-  const breadthNote = breadthCards.some(c => c.tone === "watch")
-    ? " Market breadth is narrowing — a shrinking handful of stocks is carrying the gains, the kind of participation slip that can precede trouble."
+  // ── 1. Risk sub-scores via published reference bands (100 = max risk) ──────
+  const r = {
+    nfci: v("nfci") == null ? null : interp(v("nfci")!, [[-0.5, 0], [0, 50], [1.0, 100]]),
+    hy_spread: v("hy_spread") == null ? null : interp(v("hy_spread")!, [[3.0, 0], [5.0, 50], [8.0, 100]]),
+    credit_spread: v("credit_spread") == null ? null : interp(v("credit_spread")!, [[1.5, 0], [2.5, 50], [4.0, 100]]),
+    t10y3m: v("t10y3m") == null ? null : interp(v("t10y3m")!, [[1.5, 0], [0, 70], [-0.5, 100]]),
+    yield_curve: v("yield_curve") == null ? null : interp(v("yield_curve")!, [[1.5, 0], [0, 70], [-0.5, 100]]),
+    sahm_rule: v("sahm_rule") == null ? null : interp(v("sahm_rule")!, [[0, 0], [0.5, 100]]),
+    cfnai_ma3: v("cfnai_ma3") == null ? null : interp(v("cfnai_ma3")!, [[0.2, 0], [-0.35, 60], [-0.70, 100]]),
+    initial_claims: v("initial_claims") == null ? null : interp(v("initial_claims")!, [[200000, 0], [300000, 50], [400000, 100]]),
+    unemployment_rate: v("unemployment_rate") == null ? null : interp(v("unemployment_rate")!, [[3.5, 0], [4.5, 50], [6.0, 100]]),
+    fed_funds_rate: v("fed_funds_rate") == null ? null : interp(v("fed_funds_rate")!, [[0, 0], [3, 50], [6, 100]]),
+    bear_score: d.bear_score ? clamp01_100(d.bear_score.score) : null,
+    vix: v("vix") == null ? null : interp(v("vix")!, [[12, 0], [20, 40], [30, 70], [40, 100]]),
+    cape: d.valuation?.cape?.value == null ? null : interp(d.valuation.cape.value, [[16, 0], [27, 50], [38, 100]]),
+    buffett: d.valuation?.buffett?.value == null ? null : interp(d.valuation.buffett.value, [[90, 0], [120, 50], [180, 100]]),
+    breadth: d.breadth?.conc_1y == null ? null : interp(d.breadth.conc_1y, [[3, 0], [0, 50], [-6, 100]]),
+    score: v("score") == null ? null : clamp01_100(v("score")!),          // Fear&Greed: greed = risk
+    bullish_pct: v("bullish_pct") == null ? null : interp(v("bullish_pct")!, [[20, 0], [40, 50], [60, 100]]),
+    michigan_inv: v("michigan_sentiment") == null ? null : interp(v("michigan_sentiment")!, [[100, 0], [70, 50], [50, 100]]),
+    epu: v("epu_index") == null ? null : interp(v("epu_index")!, [[80, 0], [200, 50], [400, 100]]),
+  };
+
+  // ── 2. CORE — weighted mean; drop-and-renormalize on missing inputs ───────
+  // card-key map lets us surface contributors by the card NAME the reader sees.
+  const coreWeights: Array<{ id: keyof typeof r; w: number; key: string; label: string }> = [
+    { id: "nfci", w: 0.18, key: "nfci", label: "financial conditions" },
+    { id: "hy_spread", w: 0.15, key: "hy", label: "high-yield credit stress" },
+    { id: "t10y3m", w: 0.13, key: "yc", label: "yield curve (10Y-3M)" },
+    { id: "yield_curve", w: 0.06, key: "yc", label: "yield curve (10Y-2Y)" },
+    { id: "credit_spread", w: 0.08, key: "cs", label: "investment-grade credit stress" },
+    { id: "sahm_rule", w: 0.10, key: "sahm", label: "Sahm recession trigger" },
+    { id: "cfnai_ma3", w: 0.08, key: "cfnai", label: "broad economic activity" },
+    { id: "initial_claims", w: 0.06, key: "ic", label: "jobless claims" },
+    { id: "unemployment_rate", w: 0.04, key: "unrate", label: "unemployment" },
+    { id: "fed_funds_rate", w: 0.02, key: "ffr", label: "policy restrictiveness" },
+    { id: "bear_score", w: 0.10, key: "bear", label: "bear-market risk score" },
+  ];
+  const present = coreWeights.filter(c => r[c.id] != null);
+  const wsum = present.reduce((s, c) => s + c.w, 0) || 1;
+  const core = present.reduce((s, c) => s + (r[c.id] as number) * (c.w / wsum), 0);
+
+  // ── 3. Valuation multiplier (bounded 0.85-1.15) ───────────────────────────
+  const valParts = [r.cape, r.buffett].filter((x): x is number => x != null);
+  const valSub = valParts.length ? valParts.reduce((s, x) => s + x, 0) / valParts.length : 50;
+  const valMult = Math.max(0.85, Math.min(1.15, 1 + 0.15 * (valSub - 50) / 50));
+
+  // ── 4. Timing overlay (VIX + breadth), bounded ±8 ─────────────────────────
+  const vixRisk = r.vix ?? 0;
+  const breadthRisk = r.breadth ?? 50;
+  const timing = Math.max(-8, Math.min(8, (vixRisk / 100) * 5 + ((breadthRisk - 50) / 50) * 3));
+
+  // ── 5. Sentiment tilt, bounded ±4 ─────────────────────────────────────────
+  const tilt = (risk: number | null, cap: number) => (risk == null ? 0 : ((risk - 50) / 50) * cap);
+  const sentiment = Math.max(-4, Math.min(4,
+    tilt(r.score, 1.5) + tilt(r.bullish_pct, 1.0) + tilt(r.michigan_inv, 0.75) + tilt(r.epu, 0.75)));
+
+  // ── 6. Composite ──────────────────────────────────────────────────────────
+  const score = Math.round(clamp01_100(core * valMult + timing + sentiment));
+  const { band, tone } = bandFor(score);
+
+  // ── 7. Top contributors — the weight × risk drivers, surfaced by card name ─
+  // Rank CORE inputs by their weighted contribution to CORE; fold in valuation
+  // and breadth/timing when they materially shift the read. De-dup by label.
+  const ranked = present
+    .map(c => ({ label: c.label, contrib: (r[c.id] as number) * (c.w / wsum) }))
+    .sort((a, b) => b.contrib - a.contrib);
+  const contributors: string[] = [];
+  const seen = new Set<string>();
+  for (const x of ranked) {
+    if (x.contrib < core / present.length * 0.75) break; // only above-average drivers
+    if (!seen.has(x.label)) { contributors.push(x.label); seen.add(x.label); }
+    if (contributors.length >= 3) break;
+  }
+  // Fold in valuation / breadth when they're pushing risk up (glass-box honesty).
+  if (valMult > 1.05 && !seen.has("stretched valuation")) contributors.push("stretched valuation");
+  if (breadthRisk >= 60 && !seen.has("narrowing breadth")) contributors.push("narrowing breadth");
+  const topContributors = contributors.slice(0, 3);
+
+  const contribStr = topContributors.length
+    ? ` Biggest contributors: ${topContributors.join(", ")}.`
     : "";
-  const extra = valNote + breadthNote;
 
-  // Soft-data note — sentiment/policy only (news-driven, weak predictor alone).
-  const softNote = t2Stress > 0
-    ? ` (${t2Stress} sentiment/policy flag${t2Stress > 1 ? "s" : ""} up, but soft data isn't a recession predictor on its own.)`
-    : t2Watch > 0
-      ? ` (Sentiment is mixed but hard data is clean.)`
-      : "";
+  // Fold the existing valuation-backdrop / breadth-caution prose in via the
+  // contributor logic + multiplier read, kept factual (no judgment headline).
+  const valBackdrop =
+    valSub >= 70 ? " Valuations are historically stretched on both CAPE and the Buffett Indicator — a backdrop that raises the stakes but says nothing about timing."
+    : valSub >= 55 ? " Valuations are on the expensive side — a backdrop, not a timing signal."
+    : "";
+  const breadthNote = breadthRisk >= 70
+    ? " Breadth is narrow — a shrinking handful of stocks is carrying the gains."
+    : "";
 
-  const headline = "How is the US market today?";
-  const base = { headline, t1Stress, t1Watch, t1Total, t2Stress, t2Watch };
+  const subhead = `Composite ${score}/100 — ${band}.${contribStr}${valBackdrop}${breadthNote}`;
 
-  if (t1Stress >= 2) {
-    return { ...base, weatherWord: "Stormy", subhead: `${t1Stress} of ${t1Total} recession or credit indicators are flashing red.${softNote}${extra}`, tone: "stress" };
-  }
-  if (t1Stress >= 1) {
-    return { ...base, weatherWord: "Mixed", subhead: `${t1Stress} of ${t1Total} hard-data flags is red; the rest are calm.${softNote}${extra}`, tone: "watch" };
-  }
-  if (t1Watch >= 3) {
-    return { ...base, weatherWord: "Cloudy", subhead: `${t1Watch} of ${t1Total} recession/credit indicators are yellow.${softNote}${extra}`, tone: "watch" };
-  }
-  if (t1Watch >= 1) {
-    return { ...base, weatherWord: "Mostly clear", subhead: `${t1Watch} of ${t1Total} recession/credit flags is yellow; the rest are calm.${softNote}${extra}`, tone: "ok" };
-  }
-  return { ...base, weatherWord: "Clear", subhead: `All ${t1Total} recession/credit indicators are calm.${softNote}${extra}`, tone: "calm" };
+  return { score, band, tone, core, valMult, valSub, timing, sentiment, topContributors, subhead };
 }
 
 function VixChart({ series }: { series: Array<{ date: string; value: number }> }) {
@@ -529,7 +612,7 @@ export default async function MarketHealthPage() {
   const data = await fetchMarketHealth();
   const sections = data ? buildSections(data) : [];
   if (data) attachMeta(sections, data);
-  const top = data && sections.length ? topHeadline(sections) : null;
+  const composite = data && sections.length ? computeComposite(data) : null;
 
   const renderedAt = data ? data.ts.slice(0, 16).replace("T", " ") + " UTC" : "—";
 
@@ -548,37 +631,50 @@ export default async function MarketHealthPage() {
             </div>
           )}
 
-          {data && top && (
+          {data && composite && (
             <>
               <header className="hero">
                 <div>
                   <div className="eyebrow">US · National · macro & market gauges · automatic, no opinions</div>
                   <h1 className="serif" style={{ fontFamily: '"IBM Plex Serif", Georgia, serif', fontSize: 56, fontWeight: 500, lineHeight: 1.04, margin: "18px 0 18px", letterSpacing: "-0.02em", color: "var(--ink)", textWrap: "balance" }}>
-                    {top.headline}
+                    How is the US market today?
                   </h1>
-                  <p className="lead" style={{ fontSize: 17, lineHeight: 1.5, color: "var(--ink-2)", maxWidth: "58ch", margin: 0 }}>{top.subhead}</p>
+                  <p className="lead" style={{ fontSize: 17, lineHeight: 1.5, color: "var(--ink-2)", maxWidth: "58ch", margin: 0 }}>{composite.subhead}</p>
+                  <p style={{ fontSize: 13, color: "var(--ink-3)", margin: "10px 0 0", fontStyle: "italic" }}>
+                    A snapshot of today&apos;s conditions from public data — not a forecast, not advice.
+                  </p>
                   <p style={{ fontSize: 13, color: "var(--ink-3)", margin: "12px 0 0" }}>
                     Updated {renderedAt} · refreshes daily at midnight Eastern · each gauge below shows its own &ldquo;as of&rdquo; date
                   </p>
                 </div>
                 <aside className="hero-side">
                   <div className="hero-stat">
-                    <div className={`n ${top.tone === "stress" ? "neg" : top.tone === "watch" ? "warn" : top.tone === "calm" ? "pos" : ""}`}>
-                      {top.t1Stress}
-                      <span style={{ fontSize: 18, color: "var(--ink-3)" }}> / {top.t1Total}</span>
+                    <div className={`n ${composite.tone === "stress" ? "neg" : composite.tone === "watch" ? "warn" : composite.tone === "calm" ? "pos" : ""}`}>
+                      {composite.score}
+                      <span style={{ fontSize: 18, color: "var(--ink-3)" }}> / 100</span>
                     </div>
-                    <div className="label">Hard-data flags red<br />recession + credit tier</div>
+                    <div className="label">Composite weather score<br />{composite.band}</div>
                   </div>
-                  <div className="hero-stat">
-                    <div className={`n ${top.t1Watch >= 3 ? "warn" : ""}`}>
-                      {top.t1Watch}
-                      <span style={{ fontSize: 18, color: "var(--ink-3)" }}> / {top.t1Total}</span>
+                  <div className="hero-stat" style={{ borderTop: "1px solid #e6e0d4", paddingTop: 12 }}>
+                    <div style={{ fontSize: 12, color: "#5a564d", lineHeight: 1.7, display: "grid", gap: 2 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+                        <span>Core (macro + credit)</span>
+                        <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, color: "#1f1d18" }}>{Math.round(composite.core)}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+                        <span>Valuation</span>
+                        <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, color: "#1f1d18" }}>×{composite.valMult.toFixed(2)}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+                        <span>Timing (VIX + breadth)</span>
+                        <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, color: "#1f1d18" }}>{composite.timing >= 0 ? "+" : ""}{composite.timing.toFixed(1)}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+                        <span>Sentiment</span>
+                        <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, color: "#1f1d18" }}>{composite.sentiment >= 0 ? "+" : ""}{composite.sentiment.toFixed(1)}</span>
+                      </div>
                     </div>
-                    <div className="label">Hard-data flags yellow<br />watch zone</div>
-                  </div>
-                  <div className="hero-stat">
-                    <div className="n" style={{ fontSize: 22 }}>{top.weatherWord}</div>
-                    <div className="label">Composite read<br />derived from flag counts</div>
+                    <div className="label" style={{ marginTop: 8 }}>How the score is built<br />core × valuation + timing + sentiment</div>
                   </div>
                 </aside>
               </header>

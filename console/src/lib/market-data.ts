@@ -172,6 +172,7 @@ export async function getMarketHealth(): Promise<MarketHealth> {
   // nominal window the page never renders. Daily series count in business days.
   const FRED: Array<[string, string, number, string]> = [
     ["yield_curve", "T10Y2Y", 65, "3 months"],         // SHOW (bps)
+    ["t10y3m", "T10Y3M", 65, "3 months"],               // level-only (composite input; stronger recession predictor than 10Y-2Y)
     ["sahm_rule", "SAHMREALTIME", 3, "3mo"],            // level-only (already a trend)
     ["cfnai_ma3", "CFNAIMA3", 3, "3mo"],                // level-only (already smoothed)
     ["hy_spread", "BAMLH0A0HYM2", 20, "1 month"],       // SHOW (bps)
