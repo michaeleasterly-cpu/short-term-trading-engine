@@ -37,6 +37,29 @@ const BLS_HEADERS: Record<string, string> = {
   Accept: "text/csv,application/json,*/*",
 };
 
+// Shared retry/backoff wrapper around fetch. The 6 public regional/market pages
+// prerender in parallel, which fans out concurrent FRED + Census calls and can
+// trip rate limits (HTTP 429) or transient 5xx. Retry those (honoring
+// Retry-After when present, else exponential backoff + jitter) before letting
+// the caller's graceful-null fallback kick in. Success/4xx behavior unchanged.
+async function rfetch(
+  url: string,
+  init?: RequestInit & { next?: { revalidate?: number } },
+  attempts = 4,
+): Promise<Response> {
+  for (let i = 0; i < attempts; i++) {
+    const res = await fetch(url, init);
+    if (res.status !== 429 && res.status < 500) return res;
+    const ra = Number(res.headers.get("retry-after"));
+    const waitMs = ra
+      ? ra * 1000
+      : Math.min(8000, 400 * 2 ** i) + Math.floor(Math.random() * 250);
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, waitMs));
+    else return res;
+  }
+  return fetch(url, init); // unreachable
+}
+
 // ── shared types (mirror the page data contract) ───────────────────────────
 export interface Indicator {
   value: number;
@@ -211,7 +234,7 @@ async function fredLatest(seriesId: string): Promise<Indicator | null> {
     `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}` +
     `&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=20`;
   try {
-    const res = await fetch(url, { next: { revalidate: DAY } });
+    const res = await rfetch(url, { next: { revalidate: DAY } });
     if (!res.ok) return null;
     const j = (await res.json()) as {
       observations?: Array<{ date: string; value: string }>;
@@ -283,7 +306,7 @@ async function censusAcsPlace(
     `&for=${encodeURIComponent(`place:${placeFips}`)}&in=${encodeURIComponent(`state:${stateFips}`)}` +
     `&key=${CENSUS_KEY}`;
   try {
-    const res = await fetch(url, { next: { revalidate: DAY } });
+    const res = await rfetch(url, { next: { revalidate: DAY } });
     if (!res.ok) return null;
     const data = (await res.json()) as string[][];
     if (!data || data.length < 2) return null;
@@ -401,7 +424,7 @@ export async function acsLaborTruth(
 
   let rows: string[][];
   try {
-    const res = await fetch(url, { next: { revalidate: DAY } });
+    const res = await rfetch(url, { next: { revalidate: DAY } });
     if (!res.ok) return null;
     rows = (await res.json()) as string[][];
   } catch {
@@ -694,7 +717,7 @@ async function qcewLatestQuarter(): Promise<[number, number]> {
   // Probe against a stable county (Jackson, 17077) like the console-api does.
   for (const [yy, qq] of candidates) {
     try {
-      const res = await fetch(
+      const res = await rfetch(
         `https://data.bls.gov/cew/data/api/${yy}/${qq}/area/17077.csv`,
         { method: "HEAD", headers: BLS_HEADERS, next: { revalidate: DAY } },
       );
@@ -713,7 +736,7 @@ async function qcewFetchOneCounty(
 ): Promise<Array<Record<string, string>>> {
   const areaCode = "17" + fips5;
   try {
-    const res = await fetch(
+    const res = await rfetch(
       `https://data.bls.gov/cew/data/api/${year}/${qtr}/area/${areaCode}.csv`,
       { headers: BLS_HEADERS, next: { revalidate: DAY } },
     );
@@ -851,7 +874,7 @@ async function usaspendingPost(
   body: unknown,
 ): Promise<Record<string, unknown>> {
   try {
-    const res = await fetch(`https://api.usaspending.gov${path}`, {
+    const res = await rfetch(`https://api.usaspending.gov${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1137,7 +1160,7 @@ async function fredSeriesRecent(
     `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}` +
     `&api_key=${FRED_KEY}&file_type=json&sort_order=desc&limit=${limit}`;
   try {
-    const res = await fetch(url, { next: { revalidate: DAY } });
+    const res = await rfetch(url, { next: { revalidate: DAY } });
     if (!res.ok) return [];
     const j = (await res.json()) as {
       observations?: Array<{ date: string; value: string }>;

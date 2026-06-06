@@ -21,6 +21,29 @@ const DAY = 86400;
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
 
+// Shared retry/backoff wrapper around fetch. The 6 public regional/market pages
+// prerender in parallel, which fans out concurrent FRED + FMP + multpl + AAII
+// calls and can trip rate limits (HTTP 429) or transient 5xx. Retry those
+// (honoring Retry-After when present, else exponential backoff + jitter) before
+// the caller's graceful fallback kicks in. Success/4xx behavior unchanged.
+async function rfetch(
+  url: string,
+  init?: RequestInit & { next?: { revalidate?: number } },
+  attempts = 4,
+): Promise<Response> {
+  for (let i = 0; i < attempts; i++) {
+    const res = await fetch(url, init);
+    if (res.status !== 429 && res.status < 500) return res;
+    const ra = Number(res.headers.get("retry-after"));
+    const waitMs = ra
+      ? ra * 1000
+      : Math.min(8000, 400 * 2 ** i) + Math.floor(Math.random() * 250);
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, waitMs));
+    else return res;
+  }
+  return fetch(url, init); // unreachable
+}
+
 export type Dir = "up" | "down" | "flat";
 export interface Trend { delta: number; pct: number | null; dir: Dir; window: string; }
 export interface Indicator { value: number; date: string; trend?: Trend; }
@@ -55,7 +78,7 @@ async function fredSeries(seriesId: string, days = 480): Promise<Obs[]> {
   const url =
     `https://api.stlouisfed.org/fred/series/observations?series_id=${seriesId}` +
     `&api_key=${FRED_KEY}&file_type=json&observation_start=${start}&sort_order=asc`;
-  const res = await fetch(url, { next: { revalidate: DAY } });
+  const res = await rfetch(url, { next: { revalidate: DAY } });
   if (!res.ok) return [];
   const j = (await res.json()) as { observations?: Array<{ date: string; value: string }> };
   return (j.observations ?? [])
@@ -66,7 +89,7 @@ async function fredSeries(seriesId: string, days = 480): Promise<Obs[]> {
 interface FmpQuote { price: number; previousClose?: number; changePercentage?: number; }
 async function fmpQuote(symbol: string): Promise<FmpQuote | null> {
   const url = `https://financialmodelingprep.com/stable/quote?symbol=${encodeURIComponent(symbol)}&apikey=${FMP_KEY}`;
-  const res = await fetch(url, { next: { revalidate: DAY } });
+  const res = await rfetch(url, { next: { revalidate: DAY } });
   if (!res.ok) return null;
   const j = (await res.json()) as FmpQuote[];
   return Array.isArray(j) && j.length ? j[0] : null;
@@ -74,7 +97,7 @@ async function fmpQuote(symbol: string): Promise<FmpQuote | null> {
 
 async function fmpHistory(symbol: string, keep = 220): Promise<number[]> {
   const url = `https://financialmodelingprep.com/stable/historical-price-eod/full?symbol=${encodeURIComponent(symbol)}&apikey=${FMP_KEY}`;
-  const res = await fetch(url, { next: { revalidate: DAY } });
+  const res = await rfetch(url, { next: { revalidate: DAY } });
   if (!res.ok) return [];
   const j = await res.json();
   const rows: Array<{ date: string; close: number }> = Array.isArray(j) ? j : (j.historical ?? []);
@@ -88,7 +111,7 @@ async function fmpHistory(symbol: string, keep = 220): Promise<number[]> {
 
 async function fmpHistoryDated(symbol: string, keep = 200): Promise<Obs[]> {
   const url = `https://financialmodelingprep.com/stable/historical-price-eod/full?symbol=${encodeURIComponent(symbol)}&apikey=${FMP_KEY}`;
-  const res = await fetch(url, { next: { revalidate: DAY } });
+  const res = await rfetch(url, { next: { revalidate: DAY } });
   if (!res.ok) return [];
   const j = await res.json();
   const rows: Array<{ date: string; close: number }> = Array.isArray(j) ? j : (j.historical ?? []);
@@ -100,7 +123,7 @@ async function fmpHistoryDated(symbol: string, keep = 200): Promise<Obs[]> {
 }
 
 async function fetchXls(url: string): Promise<XLSX.WorkBook | null> {
-  const res = await fetch(url, {
+  const res = await rfetch(url, {
     headers: { "User-Agent": UA, Referer: new URL(url).origin },
     next: { revalidate: DAY },
   });
@@ -110,7 +133,7 @@ async function fetchXls(url: string): Promise<XLSX.WorkBook | null> {
 }
 
 async function fetchText(url: string): Promise<string> {
-  const res = await fetch(url, { headers: { "User-Agent": UA }, next: { revalidate: DAY } });
+  const res = await rfetch(url, { headers: { "User-Agent": UA }, next: { revalidate: DAY } });
   return res.ok ? res.text() : "";
 }
 
