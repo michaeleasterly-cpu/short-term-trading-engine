@@ -4,6 +4,10 @@ Cross-cutting personal action items that don't fit existing docs. Operational
 build queues belong in `docs/DATABASE_AND_DATAFLOW.md §5 Implementation Queue`
 or `docs/MASTER_PLAN.md §9 Build Order`.
 
+## ✅ Public market site — self-fetching, DB-independent, console-api DECOMMISSIONED (DONE 2026-06-06)
+
+**COMPLETE.** All 6 public pages (`/market` + carbondale/charleston/murphysboro/east-central-illinois/southern-illinois) now self-fetch (FMP/FRED/multpl/AAII + FRED/Census/QCEW/USAspending) via `console/src/lib/market-data.ts` + `console/src/lib/regional-data.ts` — zero DB, zero Railway. Daily ISR + midnight-ET cron (`/api/revalidate`). Deployed to ste-console.vercel.app + verified live. Vercel prod env: FRED_API_KEY/FMP_API_KEY/CENSUS_DATA_API_KEY. **Railway `console-api` (e24dc630) DECOMMISSIONED** 2026-06-06 (operator confirmed operator console retired) — 4 trading daemons (data-operations/engine-service/lane-service/trade-monitor) retained. Commits ded2400 (market) → 81458d3 (regional). Detail below (kept for reference).
+
 ## ⚑ Public market site — standalone, self-fetching, DB-independent (2026-06-06)
 
 Operator directive: move the public market/macro pages to their **own Vercel site**, fully decoupled from our DB + Railway `console-api` (currently `console/src/app/market/page.tsx` → `console-api /api/public/market-health` → Supabase `macro_data`). The page must **fetch its own numbers**, run **solely in Vercel**, update dynamically, and **cache once daily, resetting at 00:00 ET** (ISR + Vercel Cron). Validated end-to-end in a Python prototype (`data/rebuild_2026-06-04/market_data_proto.py`); TS port lives in the new `ste-market` app.
