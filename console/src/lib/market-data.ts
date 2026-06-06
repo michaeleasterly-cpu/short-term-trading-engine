@@ -26,22 +26,39 @@ const UA =
 // calls and can trip rate limits (HTTP 429) or transient 5xx. Retry those
 // (honoring Retry-After when present, else exponential backoff + jitter) before
 // the caller's graceful fallback kicks in. Success/4xx behavior unchanged.
+// Concurrency limiter — caps in-flight external requests per render process so
+// the parallel prerender of 6 data-heavy pages can't burst past FRED's rate
+// limit (the real cause of cached "—%" nulls). Slots are held through backoff,
+// so a rate-limited burst naturally pauses instead of hammering.
+function makeLimiter(max: number) {
+  let active = 0;
+  const q: Array<() => void> = [];
+  return async function run<T>(fn: () => Promise<T>): Promise<T> {
+    if (active >= max) await new Promise<void>((r) => q.push(r));
+    active++;
+    try { return await fn(); } finally { active--; q.shift()?.(); }
+  };
+}
+const _limit = makeLimiter(5);
+
 async function rfetch(
   url: string,
   init?: RequestInit & { next?: { revalidate?: number } },
-  attempts = 4,
+  attempts = 5,
 ): Promise<Response> {
-  for (let i = 0; i < attempts; i++) {
-    const res = await fetch(url, init);
-    if (res.status !== 429 && res.status < 500) return res;
-    const ra = Number(res.headers.get("retry-after"));
-    const waitMs = ra
-      ? ra * 1000
-      : Math.min(8000, 400 * 2 ** i) + Math.floor(Math.random() * 250);
-    if (i < attempts - 1) await new Promise((r) => setTimeout(r, waitMs));
-    else return res;
-  }
-  return fetch(url, init); // unreachable
+  return _limit(async () => {
+    for (let i = 0; i < attempts; i++) {
+      const res = await fetch(url, init);
+      if (res.status !== 429 && res.status < 500) return res;
+      const ra = Number(res.headers.get("retry-after"));
+      const waitMs = ra
+        ? ra * 1000
+        : Math.min(20000, 500 * 2 ** i) + Math.floor(Math.random() * 400);
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, waitMs));
+      else return res;
+    }
+    return fetch(url, init); // unreachable
+  });
 }
 
 export type Dir = "up" | "down" | "flat";
