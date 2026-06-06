@@ -8,39 +8,15 @@
  * Same data source: GET /api/public/market-health. No auth.
  */
 import { DashboardHead, Topbar, DashboardFooter, DEFAULT_FOOTER_COLUMNS } from "@/components/dashboard-chrome";
+import { getMarketHealth, type MarketHealth, type Dir } from "@/lib/market-data";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || "https://console-api-production-4576.up.railway.app";
-
-interface MarketHealth {
-  ts: string;
-  indicators: Record<string, { value: number; date: string }>;
-  vix_series: Array<{ date: string; value: number }>;
-  spy_series: Array<{ date: string; close: number }>;
-  bear_score?: {
-    score: number;
-    raw: number;
-    max_raw: number;
-    breakdown: {
-      sahm_rule: number;
-      industrial_production: number;
-      initial_claims: number;
-      yield_curve: number;
-      credit_spread: number;
-      vix: number;
-    };
-  };
-  summary: { vol_regime: string; macro_regime: string; headline: string };
-}
+// Self-fetching: data comes straight from FRED / FMP / AAII / Shiller (no DB,
+// no Railway console-api). Daily ISR; a Vercel cron revalidates at 00:00 ET.
+export const revalidate = 86400;
 
 async function fetchMarketHealth(): Promise<MarketHealth | null> {
   try {
-    const res = await fetch(`${API_BASE}/api/public/market-health`, { cache: "no-store" });
-    if (!res.ok) return null;
-    return (await res.json()) as MarketHealth;
+    return await getMarketHealth();
   } catch {
     return null;
   }
@@ -67,9 +43,52 @@ interface Card {
   tone: Tone;
   explain: string;
   detail: string;
+  asOf?: string;   // indicator's as-of date (how old the data is)
+  sub?: string;    // trend line (SHOW-set only), neutral, decoupled from tone
 }
 
 type Section = { id: string; title: string; subtitle: string; cards: Card[] };
+
+// card.key → indicators[] key, for the as-of date + trend lookup.
+const CARD_IND: Record<string, string> = {
+  vix: "vix", fg: "score", aaii: "bullish_pct", sahm: "sahm_rule",
+  cfnai: "cfnai_ma3", ic: "initial_claims", unrate: "unemployment_rate",
+  yc: "yield_curve", hy: "hy_spread", cs: "credit_spread", nfci: "nfci",
+  ffr: "fed_funds_rate", epu: "epu_index", umich: "michigan_sentiment",
+};
+// SHOW-set (markets-expert verdict): where rate-of-change is itself signal.
+// Native units only (never % on spreads/zero-crossers); per-unit noise floor.
+type Unit = "bps" | "pp" | "count" | "points";
+const SHOW_TREND: Record<string, Unit> = {
+  yc: "bps", hy: "bps", cs: "bps", unrate: "pp", ic: "count", umich: "points", aaii: "points",
+};
+const FLOOR: Record<Unit, number> = { bps: 15, pp: 0.1, count: 3000, points: 1 };
+
+function fmtTrend(delta: number, dir: Dir, unit: Unit, windowLabel: string): string {
+  const mag = unit === "bps" ? delta * 100 : delta; // spreads/curve stored in %
+  if (Math.abs(mag) < FLOOR[unit]) return `little changed vs ${windowLabel}`;
+  const arrow = dir === "up" ? "▲" : dir === "down" ? "▼" : "▬";
+  const sign = mag >= 0 ? "+" : "";
+  const num =
+    unit === "count" ? `${sign}${Math.round(mag / 1000)}k`
+    : unit === "bps" ? `${sign}${Math.round(mag)} bps`
+    : unit === "pp" ? `${sign}${mag.toFixed(1)} pp`
+    : `${sign}${mag.toFixed(1)} pts`;
+  return `${arrow} ${num} vs ${windowLabel}`;
+}
+
+function attachMeta(sections: Section[], d: MarketHealth): void {
+  for (const s of sections) for (const c of s.cards) {
+    if (c.key === "cape") { c.asOf = d.valuation?.cape?.date; continue; }
+    if (c.key === "buffett") { c.asOf = d.valuation?.buffett?.date; continue; }
+    if (c.key === "breadth" || c.key === "bear") { c.asOf = d.ts.slice(0, 10); continue; }
+    const it = d.indicators[CARD_IND[c.key]];
+    if (!it) continue;
+    c.asOf = it.date;
+    const unit = SHOW_TREND[c.key];
+    if (unit && it.trend) c.sub = fmtTrend(it.trend.delta, it.trend.dir, unit, it.trend.window);
+  }
+}
 
 function buildSections(d: MarketHealth): Section[] {
   const ind = d.indicators;
@@ -301,12 +320,61 @@ function buildSections(d: MarketHealth): Section[] {
     detail: "University of Michigan Consumer Sentiment Index. Indexed to 100 in 1966-Q1. Tracks how consumers feel about the economy + their own finances; historically turned down 6-12 months before recessions (1973, 1980, 1990, 2001, 2008). Source: University of Michigan, Surveys of Consumers (monthly since 1952). Caveat: Curtin (2007, J. Economic Perspectives) shows sentiment is coincident-to-slightly-lagging, not a robust standalone recession predictor.",
   };
 
+  // Valuation — how EXPENSIVE (not when). CAPE + Buffett confirm each other.
+  const cape = d.valuation?.cape?.value;
+  const capeCard: Card | null = cape == null ? null : {
+    key: "cape",
+    question: "How expensive are stocks vs their own history?",
+    value: cape.toFixed(1),
+    tone: cape >= 35 ? "stress" : cape >= 28 ? "watch" : cape >= 22 ? "ok" : "calm",
+    explain:
+      cape >= 35 ? "Extremely stretched — near or above the 2000/2021 peaks. Says nothing about timing." :
+      cape >= 28 ? "Expensive vs history. A stretched-valuation caution, not a timing signal." :
+                   "Valuations are within a more normal historical range.",
+    detail: "CAPE (Shiller cyclically-adjusted P/E, a.k.a. P/E10): price ÷ the 10-year average of inflation-adjusted earnings, which smooths the business cycle. Historical mean ~17; readings above 30 are rare and have preceded weak forward 10-year returns. Source: Robert Shiller's data, re-priced on the live S&P 500. It tells you stocks are expensive — NOT when anything happens.",
+  };
+  const buffett = d.valuation?.buffett?.value;
+  const buffettCard: Card | null = buffett == null ? null : {
+    key: "buffett",
+    question: "How big is the stock market vs the whole economy?",
+    value: `${buffett.toFixed(0)}%`,
+    tone: buffett >= 180 ? "stress" : buffett >= 140 ? "watch" : buffett >= 100 ? "ok" : "calm",
+    explain:
+      buffett >= 180 ? "Total market value is far above GDP — stretched even vs 2000/2021. Valuation, not timing." :
+      buffett >= 140 ? "Market value is well above the size of the economy — on the expensive side." :
+                       "Market value is in a more normal range vs the economy.",
+    detail: "Buffett Indicator: total US stock-market value ÷ GDP. Warren Buffett (2001) called it “the best single measure of where valuations stand at any given moment.” Above ~100% is rich; current readings are historically extreme. It confirms CAPE — when BOTH are stretched, that is a stronger signal than either alone. Source: Wilshire-5000 total-market index ÷ FRED GDP, re-priced on the live index.",
+  };
+
+  // Breadth — PARTICIPATION / timing. Narrowing = a few names carry everyone.
+  const br = d.breadth;
+  const breadthCard: Card | null = !br ? null : {
+    key: "breadth",
+    question: "Is the whole market rising, or just a few giant stocks?",
+    value: br.state === "narrowing" ? "Narrowing" : br.state === "broadening" ? "Broad" : "Even",
+    tone: br.state === "narrowing" ? "watch" : "calm",
+    explain: br.note,
+    detail: `Breadth measures participation, not price. Equal-weight S&P 500 (RSP) minus cap-weight S&P 500 (^GSPC), 20-day return: ${br.ew_vs_cw_20d >= 0 ? "+" : ""}${br.ew_vs_cw_20d}pp. Positive = the average stock is keeping up (broad, healthy); negative = a shrinking handful of mega-cap stocks is carrying the index while the rest sag (narrowing) — the real-time timing signal valuation tools cannot give you. Companion gauges: % of stocks above their 200-day average, new highs minus new lows, the advance-decline line.`,
+  };
+
   return [
     {
       id: "market-mood",
       title: "Stock-market mood",
       subtitle: "How nervous or greedy is the stock market right now?",
       cards: cards(vixCard, fgCard, aaiiCard),
+    },
+    {
+      id: "valuation",
+      title: "Valuation — how expensive",
+      subtitle: "How stretched are stocks vs their own history (CAPE) and vs the economy (Buffett Indicator)? These say the market is expensive — not when anything happens. Both stretched at once is a stronger signal than either alone.",
+      cards: cards(capeCard, buffettCard),
+    },
+    {
+      id: "breadth",
+      title: "Breadth — who's participating",
+      subtitle: "Is the whole market rising together, or is a shrinking handful of giant stocks carrying everyone else? This is the timing/participation read that valuation cannot give.",
+      cards: cards(breadthCard),
     },
     {
       id: "recession",
@@ -329,11 +397,11 @@ function buildSections(d: MarketHealth): Section[] {
   ].filter(s => s.cards.length > 0);
 }
 
-// Section tiering — only hard recession + financial-stress data drive
-// the top "weather" headline. Soft / sentiment / policy-uncertainty data
-// gets its own subhead because it's news-driven and historically a poor
-// recession predictor on its own (Curtin 2007; Baker-Bloom-Davis 2016).
-const TIER1_SECTION_IDS = new Set(["recession", "credit"]);
+// Section tiering — only hard recession + financial-stress data drive the
+// top "weather" headline (see topHeadline). Soft / sentiment / policy data,
+// valuation, and breadth each get their own treatment because they are
+// news-driven or backdrop/timing signals, not standalone recession predictors
+// (Curtin 2007; Baker-Bloom-Davis 2016).
 
 interface TopHeadline {
   headline: string;
@@ -348,41 +416,58 @@ interface TopHeadline {
 }
 
 function topHeadline(sections: Section[]): TopHeadline {
-  const tier1 = sections.filter(s => TIER1_SECTION_IDS.has(s.id)).flatMap(s => s.cards);
-  const tier2 = sections.filter(s => !TIER1_SECTION_IDS.has(s.id)).flatMap(s => s.cards);
+  const cardsIn = (ids: string[]) => sections.filter(s => ids.includes(s.id)).flatMap(s => s.cards);
+  // Hard recession + credit data drives the "weather". Valuation = backdrop
+  // (how expensive, not when). Breadth = timing/participation caution.
+  // Sentiment/policy = soft note. Each gets its OWN treatment so the new
+  // valuation/breadth cards aren't mislabeled as "sentiment".
+  const tier1 = cardsIn(["recession", "credit"]);
+  const valuation = cardsIn(["valuation"]);
+  const breadthCards = cardsIn(["breadth"]);
+  const soft = cardsIn(["consumer"]);
 
   const t1Stress = tier1.filter(c => c.tone === "stress").length;
   const t1Watch  = tier1.filter(c => c.tone === "watch").length;
   const t1Total  = tier1.length;
-  const t2Stress = tier2.filter(c => c.tone === "stress").length;
-  const t2Watch  = tier2.filter(c => c.tone === "watch").length;
+  const t2Stress = soft.filter(c => c.tone === "stress").length;
+  const t2Watch  = soft.filter(c => c.tone === "watch").length;
 
-  // Soft-data note appended when sentiment/policy is elevated but hard
-  // data is clean — calls it out without overweighting it.
+  // Valuation backdrop — stronger when BOTH CAPE and Buffett are stretched.
+  const valStretched = valuation.filter(c => c.tone === "stress" || c.tone === "watch").length;
+  const valNote = valStretched >= 2
+    ? " Valuations are historically stretched on both CAPE and the Buffett Indicator — a backdrop that raises the stakes, though it says nothing about timing."
+    : valStretched === 1
+      ? " Valuations are on the expensive side — a backdrop, not a timing signal."
+      : "";
+  // Breadth caution — participation/timing the valuation tools can't give.
+  const breadthNote = breadthCards.some(c => c.tone === "watch")
+    ? " Market breadth is narrowing — a shrinking handful of stocks is carrying the gains, the kind of participation slip that can precede trouble."
+    : "";
+  const extra = valNote + breadthNote;
+
+  // Soft-data note — sentiment/policy only (news-driven, weak predictor alone).
   const softNote = t2Stress > 0
     ? ` (${t2Stress} sentiment/policy flag${t2Stress > 1 ? "s" : ""} up, but soft data isn't a recession predictor on its own.)`
     : t2Watch > 0
       ? ` (Sentiment is mixed but hard data is clean.)`
       : "";
 
-  // Headline is a neutral question; the weather word becomes a band identifier
-  // shown alongside the numeric flag counts, not a verdict at H1 size.
   const headline = "How is the US market today?";
   const base = { headline, t1Stress, t1Watch, t1Total, t2Stress, t2Watch };
 
   if (t1Stress >= 2) {
-    return { ...base, weatherWord: "Stormy", subhead: `${t1Stress} of ${t1Total} recession or credit indicators are flashing red.${softNote}`, tone: "stress" };
+    return { ...base, weatherWord: "Stormy", subhead: `${t1Stress} of ${t1Total} recession or credit indicators are flashing red.${softNote}${extra}`, tone: "stress" };
   }
   if (t1Stress >= 1) {
-    return { ...base, weatherWord: "Mixed", subhead: `${t1Stress} of ${t1Total} hard-data flags is red; the rest are calm.${softNote}`, tone: "watch" };
+    return { ...base, weatherWord: "Mixed", subhead: `${t1Stress} of ${t1Total} hard-data flags is red; the rest are calm.${softNote}${extra}`, tone: "watch" };
   }
   if (t1Watch >= 3) {
-    return { ...base, weatherWord: "Cloudy", subhead: `${t1Watch} of ${t1Total} recession/credit indicators are yellow.${softNote}`, tone: "watch" };
+    return { ...base, weatherWord: "Cloudy", subhead: `${t1Watch} of ${t1Total} recession/credit indicators are yellow.${softNote}${extra}`, tone: "watch" };
   }
   if (t1Watch >= 1) {
-    return { ...base, weatherWord: "Mostly clear", subhead: `${t1Watch} of ${t1Total} recession/credit flags is yellow; the rest are calm.${softNote}`, tone: "ok" };
+    return { ...base, weatherWord: "Mostly clear", subhead: `${t1Watch} of ${t1Total} recession/credit flags is yellow; the rest are calm.${softNote}${extra}`, tone: "ok" };
   }
-  return { ...base, weatherWord: "Clear", subhead: `All ${t1Total} recession/credit indicators are calm.${softNote || ""}`, tone: "calm" };
+  return { ...base, weatherWord: "Clear", subhead: `All ${t1Total} recession/credit indicators are calm.${softNote}${extra}`, tone: "calm" };
 }
 
 function VixChart({ series }: { series: Array<{ date: string; value: number }> }) {
@@ -439,6 +524,7 @@ function VixChart({ series }: { series: Array<{ date: string; value: number }> }
 export default async function MarketHealthPage() {
   const data = await fetchMarketHealth();
   const sections = data ? buildSections(data) : [];
+  if (data) attachMeta(sections, data);
   const top = data && sections.length ? topHeadline(sections) : null;
 
   const renderedAt = data ? data.ts.slice(0, 16).replace("T", " ") + " UTC" : "—";
@@ -512,9 +598,15 @@ export default async function MarketHealthPage() {
                         <div style={{ fontSize: 15, fontWeight: 600, color: "#1f1d18", marginBottom: 8 }}>
                           {c.question}
                         </div>
-                        <div style={{ fontSize: 24, fontWeight: 500, color: TONE_COLOR[c.tone], lineHeight: 1.1, marginBottom: 10 }}>
+                        <div style={{ fontSize: 24, fontWeight: 500, color: TONE_COLOR[c.tone], lineHeight: 1.1, marginBottom: 6 }}>
                           {c.value}
                         </div>
+                        {(c.sub || c.asOf) && (
+                          <div style={{ fontSize: 12, color: "#7a756b", marginBottom: 10, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "baseline" }}>
+                            {c.sub && <span style={{ color: "#5a564e", fontVariantNumeric: "tabular-nums" }}>{c.sub}</span>}
+                            {c.asOf && <span>as of {c.asOf}</span>}
+                          </div>
+                        )}
                         <div style={{ fontSize: 14, color: "#3d3a33", marginBottom: 8 }}>
                           {c.explain}
                         </div>
@@ -541,10 +633,15 @@ export default async function MarketHealthPage() {
               </div>
 
               <div style={{ marginTop: 40, fontSize: 12, color: "#8a857c", lineHeight: 1.6 }}>
-                <strong>Where the data comes from:</strong> macro indicators are pulled from FRED
-                (Federal Reserve Economic Data) and the Chicago Fed. Consumer-sentiment numbers
-                from the University of Michigan via FRED. Stock prices from the daily-close data
-                feed. Updated every weekday after the US market closes.
+                <strong>Where the data comes from:</strong> every number is fetched live, with no
+                database in between. Fast-moving market gauges (VIX, S&amp;P 500) come from a live
+                quote feed so they are not a day behind; slow macro series (jobless claims,
+                unemployment, yield curve, credit spreads, financial conditions, sentiment) from
+                FRED (Federal Reserve Economic Data) and the Chicago Fed; CAPE from Shiller&apos;s
+                data via multpl.com; the Buffett Indicator from the Federal Reserve Z.1
+                flow-of-funds; AAII sentiment from the AAII weekly survey. The page refreshes
+                once a day at midnight US Eastern, and each card shows its own &ldquo;as of&rdquo;
+                date so you can see exactly how current each number is.
               </div>
 
               <div style={{ marginTop: 24, fontSize: 12, color: "#5a564d", lineHeight: 1.7 }}>
@@ -564,6 +661,14 @@ export default async function MarketHealthPage() {
                   <li><strong>Industrial production (INDPRO)</strong> — Federal Reserve Statistical Release G.17. Standard ISM-PMI-equivalent indicator.</li>
                   <li><strong>Initial claims</strong> — US Department of Labor / Employment &amp; Training Administration weekly release. FRED series <span style={{ fontFamily: "monospace" }}>ICSA</span>.</li>
                   <li><strong>VIX</strong> — CBOE Volatility Index. Standard volatility-stress threshold ≥25.</li>
+                </ul>
+                <p style={{ margin: "0 0 6px 0", fontWeight: 600, color: "#3d3a33" }}>Valuation &amp; breadth:</p>
+                <ul style={{ margin: "0 0 10px 18px", padding: 0 }}>
+                  <li><strong>CAPE (Shiller P/E10)</strong> — Campbell, J. &amp; Shiller, R. (1988). <em>Stock Prices, Earnings, and Expected Dividends</em>. Journal of Finance 43(3); Shiller, R. (2000). <em>Irrational Exuberance</em>. Price ÷ the 10-year average of inflation-adjusted earnings. Current value via multpl.com, which re-prices Shiller&apos;s monthly data ~daily off the live S&amp;P 500. A valuation level, not a timing signal.</li>
+                  <li><strong>Buffett Indicator</strong> — Buffett, W. &amp; Loomis, C. (2001). <em>Warren Buffett on the Stock Market</em>. Fortune. Total US stock-market value ÷ GDP. Computed from the Federal Reserve Z.1 Financial Accounts (corporate equities, <span style={{ fontFamily: "monospace" }}>NCBEILQ027S</span>) ÷ GDP. Confirms CAPE — both stretched at once is a stronger signal than either alone.</li>
+                  <li><strong>Breadth (participation)</strong> — equal-weight S&amp;P 500 (<span style={{ fontFamily: "monospace" }}>RSP</span>) vs cap-weight S&amp;P 500, 20-day return. When cap-weight pulls ahead, a shrinking handful of mega-caps is carrying the index — the real-time timing/participation signal valuation cannot give. Companion gauges: % of stocks above their 200-day average, new highs−lows, advance-decline line. Cf. Zweig, M. (1986). <em>Winning on Wall Street</em> (breadth thrust).</li>
+                  <li><strong>Fear &amp; Greed</strong> — a computed composite (market momentum vs its 125-day average, volatility vs its 50-day average, junk-bond demand via the high-yield spread, safe-haven demand). Mirrors CNN Business&apos;s Fear &amp; Greed methodology, computed directly rather than scraped; CNN&apos;s put/call and NYSE-breadth sub-indices are approximated.</li>
+                  <li><strong>AAII sentiment</strong> — American Association of Individual Investors weekly Sentiment Survey (% bullish / bearish over the next 6 months), running since 1987. A contrarian indicator at extremes.</li>
                 </ul>
                 <p style={{ margin: "0 0 6px 0", fontWeight: 600, color: "#3d3a33" }}>Related composite recession / financial-stress indices:</p>
                 <ul style={{ margin: "0 0 10px 18px", padding: 0 }}>
