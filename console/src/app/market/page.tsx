@@ -640,15 +640,19 @@ export default async function MarketHealthPage() {
               </div>
 
               <div style={{ marginTop: 40, fontSize: 12, color: "#8a857c", lineHeight: 1.6 }}>
-                <strong>Where the data comes from:</strong> every number is fetched live, with no
-                database in between. Fast-moving market gauges (VIX, S&amp;P 500) come from a live
-                quote feed so they are not a day behind; slow macro series (jobless claims,
-                unemployment, yield curve, credit spreads, financial conditions, sentiment) from
-                FRED (Federal Reserve Economic Data) and the Chicago Fed; CAPE from Shiller&apos;s
-                data via multpl.com; the Buffett Indicator from the Federal Reserve Z.1
-                flow-of-funds; AAII sentiment from the AAII weekly survey. The page refreshes
-                once a day at midnight US Eastern, and each card shows its own &ldquo;as of&rdquo;
-                date so you can see exactly how current each number is.
+                <strong>Where the data comes from:</strong> every number is fetched live from its
+                primary source — there is no database in between. The fast-moving market gauges
+                (VIX, the S&amp;P 500, and the equal-weight-vs-cap-weight breadth comparison) come
+                from a live quote feed, so they show the current value rather than yesterday&apos;s
+                close — the VIX chart includes today&apos;s reading. The slower macro series
+                (jobless claims, unemployment, the yield curve, credit spreads, financial
+                conditions, consumer sentiment) come from FRED (Federal Reserve Economic Data) and
+                the Chicago Fed; CAPE from Robert Shiller&apos;s data via multpl.com; the Buffett
+                Indicator from the Federal Reserve Z.1 flow-of-funds; Fear &amp; Greed is computed
+                here from its components (no third-party scrape); and AAII sentiment from the AAII
+                weekly survey. The page caches once a day and refreshes at midnight US Eastern, and
+                every card shows its own &ldquo;as of&rdquo; date so you can see exactly how current
+                each number is.
               </div>
 
               <div style={{ marginTop: 24, fontSize: 12, color: "#5a564d", lineHeight: 1.7 }}>

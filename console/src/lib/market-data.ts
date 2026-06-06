@@ -183,13 +183,17 @@ export async function getMarketHealth(): Promise<MarketHealth> {
     if (got) indicators[key] = got;
   });
 
-  // VIX — FMP live quote (fresh, no FRED lag), trend off FMP daily history.
+  // VIX — FMP live quote (fresh, no FRED lag). Append the live quote to the EOD
+  // history so the chart's right edge is the CURRENT VIX (not yesterday's close)
+  // — the chart updates itself on every refresh. Trend off the same series.
   const vixVals = vixHistD.map((o) => o[1]);
+  const vixChartObs: Obs[] = [...vixHistD];
   if (vixQ) {
     const today = new Date().toISOString().slice(0, 10);
-    const series: Obs[] = [...vixHistD];
-    if (!series.length || series[series.length - 1][1] !== vixQ.price) series.push([today, vixQ.price]);
-    indicators["vix"] = { value: vixQ.price, date: today, trend: trend(series, 5, "5d") };
+    const last = vixChartObs[vixChartObs.length - 1];
+    if (last && last[0] === today) vixChartObs[vixChartObs.length - 1] = [today, vixQ.price];
+    else vixChartObs.push([today, vixQ.price]);
+    indicators["vix"] = { value: vixQ.price, date: today, trend: trend(vixChartObs, 5, "5d") };
   } else if (vixVals.length) {
     indicators["vix"] = ind(vixHistD, 5, "5d")!;
   }
