@@ -40,8 +40,9 @@ export interface MarketHealth {
     note: string;
   };
   breadth: {
-    ew_vs_cw_20d: number;        // equal-weight minus cap-weight 20d return, pp
-    state: "broadening" | "narrowing" | "neutral";
+    conc_1y: number;            // equal − cap-weight 1yr return, pp (− = narrow/cap-led)
+    trend_20d: number;          // equal − cap-weight 20d return, pp (recent direction)
+    state: "narrow" | "broad" | "mixed";
     note: string;
   };
 }
@@ -162,14 +163,14 @@ export async function getMarketHealth(): Promise<MarketHealth> {
   ];
 
   const [
-    fredResults, vixQ, vixHistD, spxHistD, gspc20, rsp20, aaiiWb, capeText, gdpObs, equitiesObs,
+    fredResults, vixQ, vixHistD, spxHistD, gspcH, rspH, aaiiWb, capeText, gdpObs, equitiesObs,
   ] = await Promise.all([
     Promise.all(FRED.map(([, id]) => fredSeries(id))),
     fmpQuote("^VIX"),
     fmpHistoryDated("^VIX"),
     fmpHistoryDated("^GSPC"),
-    fmpHistory("^GSPC", 30),
-    fmpHistory("RSP", 30),
+    fmpHistory("^GSPC", 300),  // ~1yr — breadth concentration needs the long window
+    fmpHistory("RSP", 300),
     fetchXls("https://www.aaii.com/files/surveys/sentiment.xls"),
     fetchText("https://www.multpl.com/shiller-pe"),  // CAPE — robust daily current value
     fredSeries("GDP", 1500),
@@ -244,19 +245,29 @@ export async function getMarketHealth(): Promise<MarketHealth> {
     buffett = { value: Math.round(ratio), date: equities[0] };
   }
 
-  // ── Breadth: equal-weight (RSP) vs cap-weight (^GSPC), 20d ──────────────
-  const cwRet = gspc20.length > 20 ? (gspc20[gspc20.length - 1] / gspc20[0] - 1) * 100 : 0;
-  const ewRet = rsp20.length > 20 ? (rsp20[rsp20.length - 1] / rsp20[0] - 1) * 100 : 0;
-  const breadthGap = ewRet - cwRet; // positive = equal-wt leading = broadening
+  // ── Breadth: equal-weight (RSP) vs cap-weight (^GSPC). CONCENTRATION is a
+  // multi-month story (the AI/mega-cap effect) — lead with the 1-year gap; the
+  // 20-day gap is only the recent direction. A 20-day-only read mislabels a
+  // structurally narrow market as "even".
+  const gapAt = (n: number): number => {
+    if (gspcH.length <= n || rspH.length <= n) return 0;
+    const cw = (gspcH[gspcH.length - 1] / gspcH[gspcH.length - 1 - n] - 1) * 100;
+    const ew = (rspH[rspH.length - 1] / rspH[rspH.length - 1 - n] - 1) * 100;
+    return ew - cw; // + = equal-weight leading (broad); − = cap-weight/mega-caps leading (narrow)
+  };
+  const conc1y = Math.round(gapAt(252) * 10) / 10;
+  const trend20 = Math.round(gapAt(20) * 10) / 10;
+  const recentDir = trend20 > 0.5 ? "broadening" : trend20 < -0.5 ? "narrowing further" : "roughly flat";
   const breadth: MarketHealth["breadth"] = {
-    ew_vs_cw_20d: Math.round(breadthGap * 10) / 10,
-    state: breadthGap > 0.5 ? "broadening" : breadthGap < -0.5 ? "narrowing" : "neutral",
+    conc_1y: conc1y,
+    trend_20d: trend20,
+    state: conc1y < -2 ? "narrow" : conc1y > 2 ? "broad" : "mixed",
     note:
-      breadthGap < -0.5
-        ? "A shrinking handful of large stocks is carrying the index — participation is narrowing."
-        : breadthGap > 0.5
-        ? "Gains are broad — the average stock is keeping up with the index."
-        : "Participation is roughly even between large and average stocks.",
+      conc1y < -2
+        ? `Over the past year a small group of giant (cap-weighted) stocks — the mega-cap/AI names — led the average stock by ~${Math.abs(Math.round(conc1y))}pp. Participation is narrow: a handful of names is carrying the index. Last few weeks: breadth ${recentDir}.`
+        : conc1y > 2
+        ? `Over the past year the average stock kept pace with or beat the mega-caps (~${Math.round(conc1y)}pp) — participation is broad. Last few weeks: ${recentDir}.`
+        : `Over the past year large and average stocks are roughly even. Last few weeks: ${recentDir}.`,
   };
 
   // ── Bear score (mirror of console-api scorer; VIX now fresh) ────────────
@@ -284,7 +295,7 @@ export async function getMarketHealth(): Promise<MarketHealth> {
   return {
     ts: new Date().toISOString(),
     indicators,
-    vix_series: vixHistD.map(([date, value]) => ({ date, value })),
+    vix_series: vixHistD.slice(-126).map(([date, value]) => ({ date, value })), // ~6 months
     spy_series: spxHistD.map(([date, close]) => ({ date, close })),
     bear_score,
     summary: {

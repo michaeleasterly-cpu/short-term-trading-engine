@@ -86,7 +86,11 @@ function attachMeta(sections: Section[], d: MarketHealth): void {
     if (!it) continue;
     c.asOf = it.date;
     const unit = SHOW_TREND[c.key];
-    if (unit && it.trend) c.sub = fmtTrend(it.trend.delta, it.trend.dir, unit, it.trend.window);
+    if (unit && it.trend) {
+      const t = fmtTrend(it.trend.delta, it.trend.dir, unit, it.trend.window);
+      // AAII shows both bull & bear; the trend is the BULLISH %, so label it.
+      c.sub = c.key === "aaii" ? `bulls ${t}` : t;
+    }
   }
 }
 
@@ -351,10 +355,10 @@ function buildSections(d: MarketHealth): Section[] {
   const breadthCard: Card | null = !br ? null : {
     key: "breadth",
     question: "Is the whole market rising, or just a few giant stocks?",
-    value: br.state === "narrowing" ? "Narrowing" : br.state === "broadening" ? "Broad" : "Even",
-    tone: br.state === "narrowing" ? "watch" : "calm",
+    value: br.state === "narrow" ? "Narrow" : br.state === "broad" ? "Broad" : "Mixed",
+    tone: br.state === "narrow" ? "watch" : "calm",
     explain: br.note,
-    detail: `Breadth measures participation, not price. Equal-weight S&P 500 (RSP) minus cap-weight S&P 500 (^GSPC), 20-day return: ${br.ew_vs_cw_20d >= 0 ? "+" : ""}${br.ew_vs_cw_20d}pp. Positive = the average stock is keeping up (broad, healthy); negative = a shrinking handful of mega-cap stocks is carrying the index while the rest sag (narrowing) — the real-time timing signal valuation tools cannot give you. Companion gauges: % of stocks above their 200-day average, new highs minus new lows, the advance-decline line.`,
+    detail: `Breadth measures participation, not price. Equal-weight S&P 500 (RSP) vs cap-weight S&P 500 (^GSPC): over the past year ${br.conc_1y >= 0 ? "+" : ""}${br.conc_1y}pp, last 20 days ${br.trend_20d >= 0 ? "+" : ""}${br.trend_20d}pp. A negative number means cap-weight (the mega-cap / AI names) is beating the average stock — a shrinking handful is carrying the index (narrow). The 1-year figure captures the structural concentration; the 20-day figure is the recent direction. This is the participation/timing read valuation cannot give. Companion gauges: % of stocks above their 200-day average, new highs minus new lows, the advance-decline line.`,
   };
 
   return [
@@ -483,13 +487,12 @@ function VixChart({ series }: { series: Array<{ date: string; value: number }> }
   }).join(" ");
   const lineY = (v: number) => 220 - ((v - min) / range) * 200;
 
-  // Sparse date ticks — 4 evenly-spaced points along the x-axis, formatted
-  // as "Mon YYYY". Picked so the chart shows roughly a tick every ~6 weeks
-  // for a 6-month window. Skipping the first index to avoid label collision
-  // with the y-axis tone-line labels on the left.
+  // Sparse date ticks — 4 evenly-spaced points INCLUDING the last index, so
+  // the rightmost label is the latest date (the chart must visibly end "now",
+  // not ~6 weeks short). Edge labels are anchored start/end to stay in-bounds.
   const TICK_COUNT = 4;
   const tickIdxs = Array.from({ length: TICK_COUNT }, (_, i) =>
-    Math.round(((i + 0.5) / TICK_COUNT) * (series.length - 1))
+    Math.round((i / (TICK_COUNT - 1)) * (series.length - 1))
   );
   const fmtMonthYear = (iso: string) => {
     const d = new Date(iso);
@@ -504,14 +507,15 @@ function VixChart({ series }: { series: Array<{ date: string; value: number }> }
       <text x="8" y={lineY(30) - 5} fill="oklch(50% 0.20 22)" fontSize="11" fontFamily="ui-sans-serif">Scared line · 30</text>
       <polyline fill="none" stroke="oklch(45% 0.16 220)" strokeWidth="2" points={pts} />
       {/* Sparse x-axis date labels — month + year only, 4 ticks across */}
-      {tickIdxs.map(idx => {
+      {tickIdxs.map((idx, i) => {
         const p = series[idx];
         if (!p) return null;
         const x = (idx / Math.max(1, series.length - 1)) * 780 + 10;
+        const anchor = i === 0 ? "start" : i === tickIdxs.length - 1 ? "end" : "middle";
         return (
           <g key={idx}>
             <line x1={x} y1="220" x2={x} y2="226" stroke="#8a857c" strokeWidth="0.5" />
-            <text x={x} y="245" fill="#5a564d" fontSize="11" fontFamily="ui-sans-serif" textAnchor="middle">
+            <text x={x} y="245" fill="#5a564d" fontSize="11" fontFamily="ui-sans-serif" textAnchor={anchor}>
               {fmtMonthYear(p.date)}
             </text>
           </g>
@@ -553,6 +557,9 @@ export default async function MarketHealthPage() {
                     {top.headline}
                   </h1>
                   <p className="lead" style={{ fontSize: 17, lineHeight: 1.5, color: "var(--ink-2)", maxWidth: "58ch", margin: 0 }}>{top.subhead}</p>
+                  <p style={{ fontSize: 13, color: "var(--ink-3)", margin: "12px 0 0" }}>
+                    Updated {renderedAt} · refreshes daily at midnight Eastern · each gauge below shows its own &ldquo;as of&rdquo; date
+                  </p>
                 </div>
                 <aside className="hero-side">
                   <div className="hero-stat">
