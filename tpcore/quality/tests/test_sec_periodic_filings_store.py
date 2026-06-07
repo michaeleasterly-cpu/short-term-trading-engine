@@ -18,10 +18,13 @@ from typing import Any
 import pytest
 
 from tpcore.quality.sec_periodic_filings_store import (
+    _FISCAL_QUARTER_TOLERANCE_DAYS,
+    _HAVE_SQL,
     ROUTED_ANNUAL_FORMS,
     ROUTED_FORMS,
     ROUTED_QUARTERLY_FORMS,
     FilingGapResult,
+    _expected_is_satisfied,
     _pure_gap,
     base_form,
     compute_filing_gaps,
@@ -133,6 +136,75 @@ def test_unanchored_distinct_from_anchored_empty() -> None:
     assert unanchored.anchored != anchored_pass.anchored
 
 
+# ── fiscal-quarter tolerance (_expected_is_satisfied / _pure_gap) ──────
+
+
+def test_fiscal_quarter_tolerance_constant_cannot_absorb_adjacent_quarter() -> None:
+    """+/-tolerance must stay well under a 13-week (~91 day) quarter so it can
+    never collapse two adjacent real quarters."""
+    assert _FISCAL_QUARTER_TOLERANCE_DAYS < 76  # nearest distinct quarter-end
+
+
+def test_expected_satisfied_within_tolerance() -> None:
+    """reportDate 2020-12-26 is SATISFIED by a have period_end 2020-12-31
+    (+5 days) — same fiscal quarter, convention skew only."""
+    assert _expected_is_satisfied(date(2020, 12, 26), [date(2020, 12, 31)])
+
+
+def test_expected_not_satisfied_when_nearest_have_far_away() -> None:
+    """A reportDate whose nearest have-date is 30 days away is still MISSING."""
+    assert not _expected_is_satisfied(date(2020, 12, 26), [date(2021, 1, 25)])
+
+
+def test_pure_gap_tolerant_match_not_missing() -> None:
+    """An expected 2020-12-26 with a have 2020-12-31 (+5d) is NOT missing."""
+    res = _pure_gap(
+        anchored=True,
+        expected={date(2020, 12, 26)},
+        have={date(2020, 12, 31)},
+        routed_forms=ROUTED_QUARTERLY_FORMS,
+    )
+    assert res.missing_periods == ()
+
+
+def test_pure_gap_far_have_is_still_missing() -> None:
+    """nearest have-date 30 days from the expected reportDate => MISSING."""
+    res = _pure_gap(
+        anchored=True,
+        expected={date(2020, 12, 26)},
+        have={date(2021, 1, 25)},
+        routed_forms=ROUTED_QUARTERLY_FORMS,
+    )
+    assert res.missing_periods == (date(2020, 12, 26),)
+
+
+def test_pure_gap_tolerance_does_not_collapse_two_adjacent_quarters() -> None:
+    """Two adjacent real quarters (~91 days apart) must NOT be collapsed: a have
+    date for one quarter cannot satisfy the expected date for the next."""
+    q3 = date(2020, 9, 30)
+    q4 = date(2020, 12, 31)
+    # We HAVE only Q3; we EXPECT both Q3 and Q4. Q4 must remain missing —
+    # the +/-15d window cannot reach from Q3's have-date to Q4's expected.
+    res = _pure_gap(
+        anchored=True,
+        expected={q3, q4},
+        have={q3},
+        routed_forms=ROUTED_QUARTERLY_FORMS,
+    )
+    assert res.missing_periods == (q4,)
+
+
+def test_pure_gap_restatement_dedup_still_neutral_with_tolerance() -> None:
+    """Restatement dedup remains neutral under tolerant matching: identical
+    expected/have period sets produce no gap."""
+    p = {date(2026, 3, 31), date(2025, 12, 31)}
+    res = _pure_gap(
+        anchored=True, expected=p, have=p,
+        routed_forms=ROUTED_QUARTERLY_FORMS,
+    )
+    assert res.missing_periods == ()
+
+
 # ── compute_filing_gaps over a fake connection ─────────────────────────
 
 
@@ -226,6 +298,92 @@ async def test_compute_filing_gaps_empty_input() -> None:
         conn, [], {},  # type: ignore[arg-type]
     )
     assert out == {}
+
+
+# ── NULL-cid period_end-window credit (_HAVE_SQL defensive arm) ────────
+
+
+def test_have_sql_credits_via_period_end_window_not_raw_ticker() -> None:
+    """The _HAVE_SQL UNION's second arm credits a NULL-cid fundamentals row to a
+    cid through that cid's OWN ticker_history window, anchored on period_end_date
+    (the same half-open predicate the trigger uses) — NOT a raw ticker-only
+    match (which would miscredit recycled-ticker reuse rows).
+
+    This is a structural guard on the recycled-ticker-safe design: assert the
+    SQL joins ticker_history with the half-open window predicate and filters on
+    classification_id IS NULL.
+    """
+    sql = _HAVE_SQL
+    # Defensive arm present.
+    assert "JOIN platform.ticker_history" in sql
+    assert "fq.classification_id IS NULL" in sql
+    # Half-open window predicate anchored on period_end_date (NOT filing_date,
+    # NOT a bare ticker equality without the window).
+    assert "th.valid_from <= fq.period_end_date" in sql
+    assert "fq.period_end_date < th.valid_to" in sql
+    # The credited cid is the ticker_history holder for that period window.
+    assert "th.classification_id" in sql
+
+
+@pytest.mark.asyncio
+async def test_compute_filing_gaps_credits_null_cid_window_row() -> None:
+    """A NULL-cid fundamentals row whose period_end falls in cid C's window is
+    credited toward C (the _HAVE_SQL UNION surfaces it as a have-date for C), so
+    an expected reportDate it covers is NOT reported missing.
+
+    The _FakeConn returns the rows _HAVE_SQL would yield AFTER the UNION (both
+    arms), which is the contract compute_filing_gaps consumes; the window join
+    itself is exercised against live data in the migration verification.
+    """
+    conn = _FakeConn(
+        anchored=["cid-A"],
+        expected=[
+            {"classification_id": "cid-A", "report_date": date(2020, 3, 31)},
+        ],
+        # cid-A has NO directly-stamped row, but the UNION's window arm credits
+        # the NULL-cid 2020-03-31 row to cid-A — so have includes it.
+        have=[
+            {"classification_id": "cid-A", "period_end_date": date(2020, 3, 31)},
+        ],
+    )
+    out = await compute_filing_gaps(
+        conn,  # type: ignore[arg-type]
+        ["cid-A"],
+        {"cid-A": "quarterly"},
+    )
+    assert out["cid-A"].anchored is True
+    assert out["cid-A"].missing_periods == ()
+
+
+@pytest.mark.asyncio
+async def test_compute_filing_gaps_recycled_gap_row_not_credited() -> None:
+    """Recycled-ticker safety: a NULL-cid reuse-ticker row that falls in a
+    GAP/predecessor period (NOT in the current holder's window) is NOT surfaced
+    by the _HAVE_SQL window arm for the current holder, so the current holder's
+    own expected reportDate stays missing if it truly has no covering have-date.
+
+    Modeled at the contract level: the predecessor row does NOT appear in
+    cid-CURRENT's have set (the window join would not credit it), so an expected
+    reportDate for cid-CURRENT with no covering have-date IS missing.
+    """
+    conn = _FakeConn(
+        anchored=["cid-CURRENT"],
+        expected=[
+            {"classification_id": "cid-CURRENT",
+             "report_date": date(2025, 6, 30)},
+        ],
+        # The predecessor-period NULL-cid row (e.g. 2016-06-30) is window-scoped
+        # to the OLD entity, so it is NOT credited to cid-CURRENT → have is empty
+        # for cid-CURRENT.
+        have=[],
+    )
+    out = await compute_filing_gaps(
+        conn,  # type: ignore[arg-type]
+        ["cid-CURRENT"],
+        {"cid-CURRENT": "quarterly"},
+    )
+    assert out["cid-CURRENT"].anchored is True
+    assert out["cid-CURRENT"].missing_periods == (date(2025, 6, 30),)
 
 
 # ── write_periodic_filings column wiring + chunking ────────────────────

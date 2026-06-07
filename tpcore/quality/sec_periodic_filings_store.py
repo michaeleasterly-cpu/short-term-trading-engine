@@ -211,12 +211,62 @@ _ANCHORED_SQL = """
     WHERE classification_id = ANY($1::text[])
 """
 
+# ``have`` is the set of period_end_date values credited toward each cid.
+# Two contributing UNION arms:
+#   Arm A — the cid is stamped directly on the fundamentals row.
+#   Arm B (defensive, recycled-ticker-SAFE) — the fundamentals row carries
+#     ``classification_id IS NULL`` but its (ticker, period_end_date) resolves to
+#     cid C through C's OWN ``ticker_history`` window, using the SAME half-open
+#     predicate the BEFORE-INSERT trigger uses (anchored on period_end_date). This
+#     credits a NULL-cid row to the entity that actually held the ticker for that
+#     fiscal period. It is period_end-window-scoped — NOT a raw ticker-only match,
+#     which would miscredit recycled-ticker (delisted-then-reused) rows to the
+#     current holder. On the repaired data (migration 20260607_0300) this arm is a
+#     no-op (0 residual NULL rows fall in any period_end window — they are exactly
+#     the pre-IPO-window / window-gap rows the trigger could not anchor), but it
+#     makes the gate immune to any FUTURE NULL-cid fundamentals row without
+#     guessing identity across an entity boundary.
 _HAVE_SQL = """
     SELECT classification_id, period_end_date
     FROM platform.fundamentals_quarterly
     WHERE classification_id = ANY($1::text[])
       AND period_end_date IS NOT NULL
+    UNION
+    SELECT th.classification_id, fq.period_end_date
+    FROM platform.fundamentals_quarterly fq
+    JOIN platform.ticker_history th
+      ON th.ticker = fq.ticker
+     AND th.valid_from <= fq.period_end_date
+     AND (th.valid_to IS NULL OR fq.period_end_date < th.valid_to)
+    WHERE fq.classification_id IS NULL
+      AND fq.period_end_date IS NOT NULL
+      AND th.classification_id = ANY($1::text[])
 """
+
+
+# Fiscal-quarter tolerance for the expected-vs-have match. An SEC
+# ``report_date`` and a fundamentals ``period_end_date`` for the SAME fiscal
+# quarter routinely differ by a handful of days (observed deltas cluster <= 6
+# days; the SEC report_date and the vendor period_end_date pick slightly
+# different period-end conventions). A 13-week quarter is ~91 days, so a +/-15
+# day window can NEVER absorb an adjacent quarter (the nearest distinct quarter
+# is >= ~76 days away), but it does collapse the same-quarter convention skew.
+_FISCAL_QUARTER_TOLERANCE_DAYS = 15
+
+
+def _expected_is_satisfied(report_date: date, have: list[date]) -> bool:
+    """An expected ``report_date`` is SATISFIED iff some ``have``
+    period_end_date lies within +/-``_FISCAL_QUARTER_TOLERANCE_DAYS`` of it.
+
+    Nearest-match within the tolerance window — NOT exact equality — so a
+    same-fiscal-quarter date that differs by a few days still counts. A
+    report_date whose nearest have-date is outside the window is genuinely
+    MISSING (the +/-15 day window cannot reach an adjacent real quarter).
+    """
+    return any(
+        abs((report_date - h).days) <= _FISCAL_QUARTER_TOLERANCE_DAYS
+        for h in have
+    )
 
 
 def _pure_gap(
@@ -226,20 +276,31 @@ def _pure_gap(
     have: set[date],
     routed_forms: frozenset[str],
 ) -> FilingGapResult:
-    """Pure set-difference + anchored discriminator (no I/O).
+    """Anchored discriminator + fiscal-quarter-tolerant set-difference (no I/O).
 
     Both ``expected`` and ``have`` are DISTINCT sets, so restatements /
-    amendments (same ``report_date``, different ``accession``) are
-    set-difference neutral. ``missing_periods`` is only meaningful when
-    ``anchored`` is True; an un-anchored issuer carries an empty tuple AND
-    ``anchored=False`` — the caller keys on ``anchored``, never treating
-    an empty ``missing_periods`` as a PASS without checking ``anchored``.
+    amendments (same ``report_date``, different ``accession``) are neutral.
+    The expected-vs-have match is NOT exact equality: an expected SEC
+    ``report_date`` is satisfied if a ``have`` period_end_date exists within the
+    SAME fiscal quarter (+/-``_FISCAL_QUARTER_TOLERANCE_DAYS`` days — see
+    :func:`_expected_is_satisfied`), which absorbs the same-quarter
+    convention skew between SEC and the vendor without ever collapsing two
+    adjacent real quarters (~91 days apart).
+
+    ``missing_periods`` is only meaningful when ``anchored`` is True; an
+    un-anchored issuer carries an empty tuple AND ``anchored=False`` — the
+    caller keys on ``anchored``, never treating an empty ``missing_periods`` as
+    a PASS without checking ``anchored``.
     """
     if not anchored:
         return FilingGapResult(
             anchored=False, missing_periods=(), routed_forms=routed_forms,
         )
-    missing = tuple(sorted(expected - have))
+    have_sorted = sorted(have)
+    missing = tuple(
+        rd for rd in sorted(expected)
+        if not _expected_is_satisfied(rd, have_sorted)
+    )
     return FilingGapResult(
         anchored=True, missing_periods=missing, routed_forms=routed_forms,
     )
