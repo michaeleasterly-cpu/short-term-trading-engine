@@ -8,8 +8,11 @@ consistent substrate.
 
 Probe coverage pinned here (one fail-test per probe, plus the clean pass):
   * sentinel ``lifetime_start = 1900-01-01`` survived (A6 no-sentinel);
-  * a classification whose ``lifetime_start < first_public_filing_date``
-    (the look-ahead rot the rebuild cures);
+  * a classification whose ``lifetime_start`` is AFTER a price bar already
+    attributed to it (the too-late-start / out-of-window rot the Phase-5
+    re-attribution cures — replaces the prior ``lifetime_start < FPFD`` probe,
+    which false-positived on securities that legitimately traded before their
+    first SEC filing);
   * ``ticker_history`` cross-classification overlap (NOT caught by the
     per-classification EXCLUDE — must be caught HERE);
   * ``issuer_history`` overlap (issuer_history has no EXCLUDE at all);
@@ -62,7 +65,7 @@ class _FakePool:
 # Each needle uniquely identifies one probe's SQL.
 _CLEAN = {
     "lifetime_start = DATE '1900-01-01'": 0,  # sentinel survivor (A6)
-    "tc.lifetime_start < tc.first_public_filing_date": 0,  # pre-FPFD rot
+    "pd.date < tc.lifetime_start": 0,  # too-late lifetime_start (out-of-window)
     "ticker_history th1": 0,  # cross-classification overlap probe
     "issuer_history ih1": 0,  # issuer_history overlap probe
     "th.classification_id": 0,  # ticker_history → classification orphan
@@ -107,12 +110,12 @@ async def test_sentinel_lifetime_start_fails() -> None:
 
 
 @pytest.mark.asyncio
-async def test_lifetime_start_before_fpfd_fails() -> None:
+async def test_lifetime_start_after_earliest_bar_fails() -> None:
     answers = dict(_CLEAN)
-    answers["tc.lifetime_start < tc.first_public_filing_date"] = 6
+    answers["pd.date < tc.lifetime_start"] = 6
     result = await evaluate_identity_gate(_FakePool(answers))
     assert result.passed is False
-    assert result.violations["lifetime_start_before_fpfd"] == 6
+    assert result.violations["lifetime_start_after_earliest_bar"] == 6
 
 
 @pytest.mark.asyncio

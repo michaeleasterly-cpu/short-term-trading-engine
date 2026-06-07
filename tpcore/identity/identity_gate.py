@@ -17,12 +17,22 @@ identity substrate is internally consistent:
      a NULL can no longer occur; the surviving rot class is a sentinel
      VALUE written before the DEFAULT was dropped (or by a non-conforming
      loader). No sentinel must survive (A6).
-  2. **0 classifications with ``lifetime_start < first_public_filing_date``**
-     — the look-ahead rot the rebuild cures: ``lifetime_start`` is anchored
-     at the SEC FPFD, so a classification whose start predates its OWN
-     ``first_public_filing_date`` (where FPFD is known) is the pre-rebuild
-     contamination. FPFD lives on ``ticker_classifications`` (verified live:
-     ``issuers`` has no FPFD column), so this is a single-table self-check.
+  2. **0 classifications whose ``lifetime_start`` is AFTER their earliest
+     attributed price bar** — the too-late-start rot (Phase-5 re-attribution,
+     2026-06-07). The PRIOR probe flagged ``lifetime_start <
+     first_public_filing_date``, but that direction is a FALSE POSITIVE: a
+     security can legitimately trade BEFORE its first SEC filing
+     (foreign / OTC / pre-IPO listings file with the SEC only after they have
+     already been trading), so ``lifetime_start < FPFD`` is correct
+     earliest-evidence, not contamination. The meaningful invariant is the
+     OPPOSITE direction — a ``lifetime_start`` set LATER than a bar already
+     attributed to the classification leaves that bar out-of-window
+     (``date < lifetime_start``), which is the actual rot the re-attribution
+     cures. This probe joins ``prices_daily`` and counts classifications with
+     ANY attributed bar earlier than their ``lifetime_start``. At the
+     pre-child-load coordinator stage ``prices_daily`` is empty so the probe is
+     trivially 0 (the rot cannot exist before attribution); at re-verify time
+     (after the price load) it is the load-bearing out-of-window check.
   3. **0 ``ticker_history`` overlaps** — the half-open windows for the same
      TICKER must not overlap ACROSS classifications (G3 reuse). The DB
      EXCLUDE (migration ``20260524_0100``) keys on ``classification_id WITH
@@ -105,15 +115,18 @@ _SENTINEL_LIFETIME_START_SQL = """
     WHERE lifetime_start = DATE '1900-01-01'
 """
 
-# (2) Pre-FPFD look-ahead — lifetime_start is anchored at the SEC FPFD, so a
-# classification whose start predates its OWN first_public_filing_date
-# (where FPFD is known) is the pre-rebuild contamination the rebuild cures.
-# FPFD lives on ticker_classifications (verified live: issuers has no FPFD
-# column), so this is a single-table self-check — no cik-join needed.
-_LIFETIME_START_BEFORE_FPFD_SQL = """
-    SELECT count(*) FROM platform.ticker_classifications tc
-    WHERE tc.first_public_filing_date IS NOT NULL
-      AND tc.lifetime_start < tc.first_public_filing_date
+# (2) Too-late lifetime_start — a classification whose lifetime_start is set
+# LATER than a price bar already attributed to it leaves that bar out-of-window
+# (date < lifetime_start). This is the actual re-attribution rot (Phase-5,
+# 2026-06-07). The PRIOR probe flagged lifetime_start < FPFD, but a security
+# legitimately trades BEFORE its first SEC filing (foreign / OTC / pre-IPO), so
+# that direction is a false positive; the meaningful invariant is the opposite
+# direction, anchored at the earliest ATTRIBUTED bar (the earliest evidence the
+# security existed). Empty prices_daily (pre-child-load) ⇒ trivially 0.
+_LIFETIME_START_AFTER_EARLIEST_BAR_SQL = """
+    SELECT count(DISTINCT tc.id) FROM platform.ticker_classifications tc
+    JOIN platform.prices_daily pd ON pd.classification_id = tc.id
+    WHERE pd.date < tc.lifetime_start
 """
 
 # (3) ticker_history cross-classification overlap — two DISTINCT rows for the
@@ -234,7 +247,7 @@ _ETF_ATTRIBUTES_NON_ETF_SQL = """
 
 _PROBES: tuple[tuple[str, str], ...] = (
     ("sentinel_lifetime_start", _SENTINEL_LIFETIME_START_SQL),
-    ("lifetime_start_before_fpfd", _LIFETIME_START_BEFORE_FPFD_SQL),
+    ("lifetime_start_after_earliest_bar", _LIFETIME_START_AFTER_EARLIEST_BAR_SQL),
     ("ticker_history_overlaps", _TICKER_HISTORY_OVERLAP_SQL),
     ("issuer_history_overlaps", _ISSUER_HISTORY_OVERLAP_SQL),
     ("cik_classifications_without_issuer", _CLASSIFICATION_WITHOUT_ISSUER_SQL),
