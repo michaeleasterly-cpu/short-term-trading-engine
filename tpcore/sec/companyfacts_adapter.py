@@ -40,10 +40,11 @@ from __future__ import annotations
 import os
 from datetime import date
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import httpx
 import structlog
+from pydantic import BaseModel, ConfigDict, Field
 
 from tpcore.outage import DataProviderOutage
 
@@ -52,6 +53,33 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 logger = structlog.get_logger(__name__)
+
+
+class PeriodicFiling(BaseModel):
+    """One SEC periodic filing (10-Q / 10-K / 20-F / 40-F + /A variants).
+
+    Typed output of :meth:`SECCompanyFactsAdapter.extract_filing_metadata`
+    (the ``periodic_filings`` key, additive 2026-06-07). Each instance is
+    persisted to ``platform.sec_periodic_filings`` by
+    ``tpcore.quality.sec_periodic_filings_store.write_periodic_filings``.
+
+    ``filing_date`` is REQUIRED — it is the BEFORE-INSERT trigger's
+    ``as_of`` anchor (the trigger resolves ``classification_id`` from
+    ``ticker_history`` at ``valid_from <= filing_date < valid_to``).
+    ``report_date`` may be ``None`` (some filings omit it; the table
+    column is NULL-able). ``accession_number`` is the per-filing UNIQUE
+    key (with ``cik``) used for idempotent ON CONFLICT DO NOTHING.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    form_type: Literal[
+        "10-Q", "10-K", "20-F", "40-F",
+        "10-Q/A", "10-K/A", "20-F/A", "40-F/A",
+    ]
+    filing_date: date
+    report_date: date | None
+    accession_number: str = Field(min_length=1)
 
 
 SEC_DATA_BASE_URL = "https://data.sec.gov"
@@ -314,6 +342,7 @@ class SECCompanyFactsAdapter:
         forms = list(recent.get("form") or [])
         filing_dates = list(recent.get("filingDate") or [])
         report_dates = list(recent.get("reportDate") or [])
+        accessions = list(recent.get("accessionNumber") or [])
 
         if not forms:
             return {
@@ -324,14 +353,23 @@ class SECCompanyFactsAdapter:
                 "fiscal_year_end_month": _parse_fiscal_year_end_mmdd(
                     submissions.get("fiscalYearEnd"),
                 ),
+                "periodic_filings": [],
             }
 
         # Align parallel arrays defensively — SEC keeps them in lock-
-        # step but slice to the shortest length just in case.
+        # step but slice to the shortest length just in case. NOTE: the
+        # accessionNumber array is deliberately EXCLUDED from this slice
+        # so a payload that omits accessionNumber (older callers /
+        # fixtures) does NOT zero out ``n`` and break the histogram /
+        # primary / FPFD derivation. accessions is padded to ``n`` below
+        # purely for the additive periodic_filings build.
         n = min(len(forms), len(filing_dates), len(report_dates))
         forms = forms[:n]
         filing_dates = filing_dates[:n]
         report_dates = report_dates[:n]
+        # Pad accessions to ``n`` with None so the periodic zip stays
+        # length-aligned; a None accession is skipped (logged) below.
+        accessions = accessions[:n] + [None] * max(0, n - len(accessions))
 
         full_histogram: Counter = Counter(forms)
 
@@ -404,6 +442,48 @@ class SECCompanyFactsAdapter:
             first_filing = min(all_fd)
             last_filing = max(all_fd)
 
+        # Typed periodic-filing rows (additive 2026-06-07) — the
+        # canonical source for ``platform.sec_periodic_filings``.
+        # Built from the same lock-step arrays PLUS accessionNumber.
+        # Filter to the 8 routed periodic forms (incl. /A); skip
+        # non-periodic forms (8-K, 4, S-*, …). filing_date +
+        # accession_number are REQUIRED (filing_date is the trigger's
+        # as_of anchor; accession_number is the UNIQUE key) — skip a
+        # row missing either (logged as a debug count). report_date
+        # may be None.
+        periodic_filings: list[PeriodicFiling] = []
+        skipped_periodic = 0
+        for f, fd, rd, acc in zip(
+            forms, filing_dates, report_dates, accessions, strict=False,
+        ):
+            if f not in _PERIODIC_FORMS:
+                continue
+            try:
+                fd_d = _date.fromisoformat(fd) if fd else None
+            except (ValueError, TypeError):
+                fd_d = None
+            try:
+                rd_d = _date.fromisoformat(rd) if rd else None
+            except (ValueError, TypeError):
+                rd_d = None
+            acc_s = acc if isinstance(acc, str) and acc else None
+            if fd_d is None or acc_s is None:
+                skipped_periodic += 1
+                continue
+            periodic_filings.append(
+                PeriodicFiling(
+                    form_type=f,  # type: ignore[arg-type]
+                    filing_date=fd_d,
+                    report_date=rd_d,
+                    accession_number=acc_s,
+                )
+            )
+        if skipped_periodic:
+            logger.debug(
+                "sec.companyfacts.extract_filing_metadata.periodic_skipped",
+                skipped=skipped_periodic,
+            )
+
         return {
             "document_type_primary": primary,
             "document_type_history": dict(full_histogram),
@@ -412,6 +492,7 @@ class SECCompanyFactsAdapter:
             "fiscal_year_end_month": _parse_fiscal_year_end_mmdd(
                 submissions.get("fiscalYearEnd"),
             ),
+            "periodic_filings": periodic_filings,
         }
 
     @staticmethod

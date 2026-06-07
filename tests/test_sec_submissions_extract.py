@@ -19,6 +19,7 @@ import pytest
 os.environ.setdefault("SEC_EDGAR_USER_AGENT", "STE-test test@example.com")
 
 from tpcore.sec.companyfacts_adapter import (  # noqa: E402
+    PeriodicFiling,
     SECCompanyFactsAdapter,
     _parse_fiscal_year_end_mmdd,
 )
@@ -583,3 +584,124 @@ def test_008g_backfill_sec_metadata_calls_get_submissions_full_history_true() ->
         "removing the full_history=True kwarg silently regresses "
         "FPFD for ~999 long-lived issuers."
     )
+
+
+# ── PeriodicFiling model + periodic_filings extractor key (2026-06-07) ──
+
+
+def _submissions_with_accessions() -> dict:
+    """Submissions payload carrying the accessionNumber array so the
+    periodic_filings extractor has a full set of aligned rows. Mixes
+    periodic forms (10-Q/10-K/10-Q/A) with non-periodic (8-K/4) which
+    must be filtered out."""
+    return {
+        "cik": "0000320193",
+        "fiscalYearEnd": "1231",
+        "filings": {
+            "recent": {
+                "form": ["10-Q", "10-K", "10-Q/A", "8-K", "4"],
+                "filingDate": [
+                    "2026-05-01", "2025-09-15", "2026-02-10",
+                    "2026-05-20", "2026-04-01",
+                ],
+                "reportDate": [
+                    "2026-03-31", "2025-06-30", "2025-12-31",
+                    "2026-05-20", "2026-04-01",
+                ],
+                "accessionNumber": [
+                    "0000320193-26-000001",
+                    "0000320193-25-000010",
+                    "0000320193-26-000002",
+                    "0000320193-26-000003",
+                    "0000320193-26-000004",
+                ],
+            },
+        },
+    }
+
+
+def test_periodic_filings_extracted_and_filtered() -> None:
+    meta = SECCompanyFactsAdapter.extract_filing_metadata(
+        _submissions_with_accessions()
+    )
+    periodic = meta["periodic_filings"]
+    # Only the 3 periodic forms (10-Q, 10-K, 10-Q/A) — 8-K + 4 dropped.
+    assert len(periodic) == 3
+    forms = {p.form_type for p in periodic}
+    assert forms == {"10-Q", "10-K", "10-Q/A"}
+    by_acc = {p.accession_number: p for p in periodic}
+    q = by_acc["0000320193-26-000001"]
+    assert q.form_type == "10-Q"
+    assert q.filing_date == date(2026, 5, 1)
+    assert q.report_date == date(2026, 3, 31)
+    # Existing keys remain unchanged (purely additive).
+    assert meta["document_type_primary"] == "10-Q"
+    assert meta["first_public_filing_date"] == date(2025, 9, 15)
+
+
+def test_periodic_filings_skips_missing_filing_date_or_accession() -> None:
+    payload = {
+        "fiscalYearEnd": "1231",
+        "filings": {
+            "recent": {
+                "form": ["10-Q", "10-Q", "10-K"],
+                # second 10-Q has no filing_date → skipped.
+                "filingDate": ["2026-05-01", "", "2025-09-15"],
+                "reportDate": ["2026-03-31", "2025-12-31", "2025-06-30"],
+                # 10-K has empty accession → skipped.
+                "accessionNumber": [
+                    "0000320193-26-000001", "0000320193-26-000002", "",
+                ],
+            },
+        },
+    }
+    meta = SECCompanyFactsAdapter.extract_filing_metadata(payload)
+    periodic = meta["periodic_filings"]
+    assert len(periodic) == 1
+    assert periodic[0].accession_number == "0000320193-26-000001"
+
+
+def test_periodic_filings_none_report_date_allowed() -> None:
+    payload = {
+        "fiscalYearEnd": "1231",
+        "filings": {
+            "recent": {
+                "form": ["10-K"],
+                "filingDate": ["2025-09-15"],
+                "reportDate": [None],
+                "accessionNumber": ["0000320193-25-000010"],
+            },
+        },
+    }
+    meta = SECCompanyFactsAdapter.extract_filing_metadata(payload)
+    assert len(meta["periodic_filings"]) == 1
+    assert meta["periodic_filings"][0].report_date is None
+
+
+def test_periodic_filings_empty_when_no_forms() -> None:
+    meta = SECCompanyFactsAdapter.extract_filing_metadata({})
+    assert meta["periodic_filings"] == []
+
+
+def test_periodic_filing_model_rejects_bad_form() -> None:
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        PeriodicFiling(
+            form_type="8-K",  # not a routed periodic form
+            filing_date=date(2026, 1, 1),
+            report_date=None,
+            accession_number="x",
+        )
+
+
+def test_periodic_filing_model_rejects_empty_accession() -> None:
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        PeriodicFiling(
+            form_type="10-Q",
+            filing_date=date(2026, 1, 1),
+            report_date=None,
+            accession_number="",
+        )
