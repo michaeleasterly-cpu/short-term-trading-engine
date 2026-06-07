@@ -47,6 +47,18 @@ identity substrate is internally consistent:
   8. **0 orphan ``issuer_id``** in ``issuer_securities`` / ``issuer_history``
      (every referenced issuer exists — the M:N + SCD-2 tables point only
      at real issuers).
+  9. **Every etf/etn classification has an ``etf_attributes`` row** — the ETF
+     satellite (migration ``20260607_0100``, physical-entity separation) is a
+     1:1 attribute table for ``asset_class IN ('etf','etn')``. A missing
+     satellite row for an ETF/ETN classification is the seed-incompleteness rot
+     this probe guards.
+  10. **0 ``etf_attributes`` rows whose classification is NOT etf/etn** — the
+      satellite must hold ONLY ETF/ETN attributes. A row pointing at a
+      stock/spac/fund/adr/reit classification is a mis-scoped write.
+
+This gate runs **12 probes** total (the ``_PROBES`` tuple below is the
+authoritative count): the original 10 identity-substrate probes plus the two
+ETF-satellite probes (9 + 10) added with migration ``20260607_0100``.
 
 This gate is NOT a member of the 13-check ``DATA_OPERATIONS_COMPLETE``
 suite (those checks gate the *child* data tables; the existing
@@ -198,6 +210,28 @@ _ORPHAN_ISSUER_HISTORY_SQL = """
     )
 """
 
+# (9) Every etf/etn classification must have an etf_attributes satellite row.
+# The ETF satellite (migration 20260607_0100, physical-entity separation) is a
+# 1:1 attribute table for asset_class IN ('etf','etn'). A missing satellite row
+# is seed-incompleteness — the spine still carries the etf_* columns in
+# transition mode, but the satellite is the future home and must be complete.
+_ETF_WITHOUT_ATTRIBUTES_SQL = """
+    SELECT count(*) FROM platform.ticker_classifications tc
+    WHERE tc.asset_class IN ('etf', 'etn')
+      AND NOT EXISTS (
+        SELECT 1 FROM platform.etf_attributes ea
+        WHERE ea.classification_id = tc.id
+      )
+"""
+
+# (10) The etf_attributes satellite must hold ONLY ETF/ETN attributes — a row
+# pointing at a stock/spac/fund/adr/reit classification is a mis-scoped write.
+_ETF_ATTRIBUTES_NON_ETF_SQL = """
+    SELECT count(*) FROM platform.etf_attributes ea
+    JOIN platform.ticker_classifications tc ON tc.id = ea.classification_id
+    WHERE tc.asset_class NOT IN ('etf', 'etn')
+"""
+
 _PROBES: tuple[tuple[str, str], ...] = (
     ("sentinel_lifetime_start", _SENTINEL_LIFETIME_START_SQL),
     ("lifetime_start_before_fpfd", _LIFETIME_START_BEFORE_FPFD_SQL),
@@ -218,6 +252,8 @@ _PROBES: tuple[tuple[str, str], ...] = (
     ),
     ("orphan_issuer_id_in_securities", _ORPHAN_ISSUER_SECURITIES_SQL),
     ("orphan_issuer_id_in_history", _ORPHAN_ISSUER_HISTORY_SQL),
+    ("etf_without_attributes", _ETF_WITHOUT_ATTRIBUTES_SQL),
+    ("etf_attributes_non_etf", _ETF_ATTRIBUTES_NON_ETF_SQL),
 )
 
 

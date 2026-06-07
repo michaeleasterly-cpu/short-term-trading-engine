@@ -15,9 +15,11 @@ schema, per ``docs/superpowers/specs/2026-06-05-identity-entity-model-delta.md``
      REBUILT from cik-bearing **stock/reit** classifications only — the issuer
      satellite is an operating-equity model (ETFs/funds/SPACs/ADRs keep a CIK
      attribute but get no issuer row; gate probes 5/6 are asset_class-guarded).
-  5. Runs the 10-probe ``evaluate_identity_gate`` and reports.
+  5. ``etf_attributes`` satellite REBUILT from the spine etf/etn rows (migration
+     ``20260607_0100`` — physical-entity separation; gate probes 9/10).
+  6. Runs the 12-probe ``evaluate_identity_gate`` and reports.
 
-Idempotent: TRUNCATEs the five identity tables (FK-safe order) before load.
+Idempotent: TRUNCATEs the six identity tables (FK-safe order) before load.
 ``--dry-run`` parses the CSVs + reports counts WITHOUT touching the DB.
 """
 from __future__ import annotations
@@ -201,7 +203,22 @@ _BUILD_ISSUER_HISTORY_SQL = """
     FROM platform.issuers i
 """
 
+# ETF satellite — rebuilt from the spine etf/etn rows (migration 20260607_0100,
+# physical-entity separation). The seed is a bootstrap/re-seed writer; the
+# steady-state writer is tpcore/data/classify_tickers.py (post-rewire). Sourced
+# from the spine so it can never orphan against the FK back to
+# ticker_classifications.id.
+_BUILD_ETF_ATTRIBUTES_SQL = """
+    INSERT INTO platform.etf_attributes
+        (classification_id, etf_inverse, etf_leverage, etf_category)
+    SELECT id, etf_inverse, etf_leverage, etf_category
+    FROM platform.ticker_classifications
+    WHERE asset_class IN ('etf', 'etn')
+    ON CONFLICT (classification_id) DO NOTHING
+"""
+
 _IDENTITY_TABLES_FK_SAFE = (
+    "etf_attributes",
     "issuer_securities", "issuer_history", "ticker_history",
     "issuers", "ticker_classifications",
 )
@@ -275,13 +292,15 @@ async def amain(args: argparse.Namespace) -> int:
             await conn.execute(_BUILD_ISSUERS_SQL)
             await conn.execute(_BUILD_ISSUER_SECURITIES_SQL)
             await conn.execute(_BUILD_ISSUER_HISTORY_SQL)
+            logger.info("building etf_attributes satellite (etf/etn spine rows)")
+            await conn.execute(_BUILD_ETF_ATTRIBUTES_SQL)
             counts = {}
             for t in ("ticker_classifications", "ticker_history", "issuers",
-                      "issuer_securities", "issuer_history"):
+                      "issuer_securities", "issuer_history", "etf_attributes"):
                 counts[t] = await conn.fetchval(f"SELECT count(*) FROM platform.{t}")
             logger.info("seeded counts: %s", json.dumps(counts))
 
-            logger.info("running identity gate (10 probes)")
+            logger.info("running identity gate (12 probes)")
             gate = await evaluate_identity_gate(conn)
         print("=" * 60)
         print(f"SEED COMPLETE — tc={n_tc} th={n_th}")

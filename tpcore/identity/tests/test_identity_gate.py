@@ -18,7 +18,11 @@ Probe coverage pinned here (one fail-test per probe, plus the clean pass):
   * 0 orphan ``classification_id`` in ticker_history / issuer_securities;
   * 0 orphan ``issuer_id`` in issuer_securities / issuer_history;
   * the cik-join is zfill-normalized so an unpadded FMP-fallback
-    ``tc.cik`` that has a matching zfill-10 issuer is NOT a false orphan.
+    ``tc.cik`` that has a matching zfill-10 issuer is NOT a false orphan;
+  * every etf/etn classification has an ``etf_attributes`` satellite row
+    (migration 20260607_0100 physical-entity separation);
+  * the ``etf_attributes`` satellite holds ONLY etf/etn attributes (a row
+    pointing at a non-etf classification is a mis-scoped write).
 """
 from __future__ import annotations
 
@@ -67,6 +71,8 @@ _CLEAN = {
     "AS iss_exists WHERE": 0,  # cik-bearing classification w/o issuers row
     "issuer_securities es": 0,  # orphan issuer_id in issuer_securities
     "issuer_history ih_orphan": 0,  # orphan issuer_id in issuer_history
+    "etf_attributes ea\n        WHERE": 0,  # etf w/o satellite (NOT EXISTS)
+    "WHERE tc.asset_class NOT IN ('etf', 'etn')": 0,  # non-etf in satellite
 }
 
 
@@ -181,6 +187,24 @@ async def test_orphan_issuer_id_in_history_fails() -> None:
     result = await evaluate_identity_gate(_FakePool(answers))
     assert result.passed is False
     assert result.violations["orphan_issuer_id_in_history"] == 1
+
+
+@pytest.mark.asyncio
+async def test_etf_without_attributes_fails() -> None:
+    answers = dict(_CLEAN)
+    answers["etf_attributes ea\n        WHERE"] = 12
+    result = await evaluate_identity_gate(_FakePool(answers))
+    assert result.passed is False
+    assert result.violations["etf_without_attributes"] == 12
+
+
+@pytest.mark.asyncio
+async def test_etf_attributes_non_etf_fails() -> None:
+    answers = dict(_CLEAN)
+    answers["WHERE tc.asset_class NOT IN ('etf', 'etn')"] = 3
+    result = await evaluate_identity_gate(_FakePool(answers))
+    assert result.passed is False
+    assert result.violations["etf_attributes_non_etf"] == 3
 
 
 def test_cik_join_is_zfill_normalized_both_sides() -> None:
