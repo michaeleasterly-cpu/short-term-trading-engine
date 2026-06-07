@@ -205,6 +205,72 @@ def test_pure_gap_restatement_dedup_still_neutral_with_tolerance() -> None:
     assert res.missing_periods == ()
 
 
+# ── ≥2016 horizon (policy-free store pass-through) ─────────────────────
+
+
+def test_pure_gap_horizon_none_keeps_pre_horizon_periods() -> None:
+    """horizon=None is the historical behaviour: a pre-2016 expected
+    reportDate with no matching have is STILL missing, and
+    excluded_pre_horizon is 0."""
+    old = date(2014, 3, 31)
+    res = _pure_gap(
+        anchored=True, expected={old}, have=set(),
+        routed_forms=ROUTED_QUARTERLY_FORMS, horizon=None,
+    )
+    assert res.missing_periods == (old,)
+    assert res.excluded_pre_horizon == 0
+
+
+def test_pure_gap_pre_horizon_excluded_not_missing() -> None:
+    """A pre-horizon expected reportDate (no have) is EXCLUDED from the gap
+    and counted in excluded_pre_horizon — not a missing period."""
+    old = date(2014, 3, 31)
+    res = _pure_gap(
+        anchored=True, expected={old}, have=set(),
+        routed_forms=ROUTED_QUARTERLY_FORMS, horizon=date(2016, 1, 1),
+    )
+    assert res.missing_periods == ()
+    assert res.excluded_pre_horizon == 1
+
+
+def test_pure_gap_on_or_after_horizon_still_missing() -> None:
+    """A reportDate ON/AFTER the horizon that is missing STILL fails — the
+    horizon never masks a recent gap. The boundary date (== horizon) is
+    in-scope (the filter is rd >= horizon)."""
+    boundary = date(2016, 1, 1)
+    later = date(2020, 6, 30)
+    res = _pure_gap(
+        anchored=True, expected={boundary, later}, have=set(),
+        routed_forms=ROUTED_QUARTERLY_FORMS, horizon=date(2016, 1, 1),
+    )
+    assert res.missing_periods == (boundary, later)
+    assert res.excluded_pre_horizon == 0
+
+
+def test_pure_gap_mixed_pre_and_post_horizon() -> None:
+    """Mixed expected set: pre-horizon excluded (counted), post-horizon
+    missing still fails."""
+    res = _pure_gap(
+        anchored=True,
+        expected={date(2013, 12, 31), date(2014, 12, 31), date(2020, 12, 31)},
+        have=set(),
+        routed_forms=ROUTED_QUARTERLY_FORMS, horizon=date(2016, 1, 1),
+    )
+    assert res.missing_periods == (date(2020, 12, 31),)
+    assert res.excluded_pre_horizon == 2
+
+
+def test_pure_gap_unanchored_horizon_is_zero() -> None:
+    """An un-anchored issuer carries excluded_pre_horizon=0 regardless of
+    horizon — there is no expected set to filter."""
+    res = _pure_gap(
+        anchored=False, expected=set(), have=set(),
+        routed_forms=ROUTED_QUARTERLY_FORMS, horizon=date(2016, 1, 1),
+    )
+    assert res.anchored is False
+    assert res.excluded_pre_horizon == 0
+
+
 # ── compute_filing_gaps over a fake connection ─────────────────────────
 
 

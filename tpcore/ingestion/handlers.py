@@ -426,22 +426,38 @@ async def handle_sec_fundamentals_fallback(
         ticker_filter=len(ticker_filter_list or []),
     )
 
+    # Detector/healer parity (2026-06-07): the completeness check scopes the
+    # gap to the ≥2016 engine-relevant horizon (excluded-with-evidence for
+    # pre-horizon SEC depth). The healer MUST inherit the SAME horizon, or it
+    # would chase pre-horizon periods the detector no longer demands —
+    # re-introducing the detector/healer divergence the shared store exists to
+    # prevent. ``_resolve_horizon`` honours the ``STE_FUNDAMENTALS_HORIZON``
+    # env override identically to the check.
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _resolve_horizon,
+    )
+    _fundamentals_horizon = _resolve_horizon()
+
     async def _missing_periods_for(t: str) -> list[_date_t]:
         """Authoritative SEC-reportDate set-difference for one ticker,
         via the SAME shared store helper the completeness check uses.
 
         Returns the SEC-filed reportDates (at the ticker's cadence) that
         are ABSENT from ``fundamentals_quarterly`` — exactly the periods
-        worth re-pulling. An ``anchored=False`` issuer (no SEC periodic
-        substrate yet) returns ``[]`` here: there is nothing authoritative
-        to backfill against, so the healer does not fabricate targets
-        (the check routes that issuer to METADATA_REQUIRED, not a gap)."""
+        worth re-pulling. Scoped to the SAME ≥2016 horizon the check uses
+        (detector/healer parity). An ``anchored=False`` issuer (no SEC
+        periodic substrate yet) returns ``[]`` here: there is nothing
+        authoritative to backfill against, so the healer does not fabricate
+        targets (the check routes that issuer to METADATA_REQUIRED, not a
+        gap)."""
         cid = cid_by_ticker.get(t)
         cadence = cadence_by_ticker.get(t)
         if cid is None or cadence is None:
             return []
         async with pool.acquire() as cx:
-            result = await compute_filing_gap(cx, cid, cadence)
+            result = await compute_filing_gap(
+                cx, cid, cadence, horizon=_fundamentals_horizon,
+            )
         if not result.anchored:
             return []
         return list(result.missing_periods)

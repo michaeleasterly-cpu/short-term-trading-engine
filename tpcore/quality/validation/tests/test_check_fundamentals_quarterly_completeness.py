@@ -66,11 +66,13 @@ class _Issuer:
         have: list[date] | None = None,
         lifecycle_state: str | None = None,
         has_sec_rows: bool | None = None,
+        asset_class: str | None = "stock",
     ) -> None:
         self.ticker = ticker
         self.cid = cid
         self.cik = cik
         self.primary = primary
+        self.asset_class = asset_class
         self.sec_report_dates = sec_report_dates or []
         self.have = have or []
         self.lifecycle_state = lifecycle_state
@@ -95,6 +97,7 @@ class _Conn:
                     "ticker": iss.ticker,
                     "classification_id": iss.cid,
                     "cik": iss.cik,
+                    "asset_class": iss.asset_class,
                     "sec_document_type_primary": iss.primary,
                     "issuer_lifecycle_state": iss.lifecycle_state,
                     "issuer_lifecycle_event_date": None,
@@ -781,3 +784,264 @@ def test_max_gap_constants_retained() -> None:
 def test_live_within_days_constants_per_cadence() -> None:
     assert LIVE_WITHIN_DAYS_QUARTERLY == 120
     assert LIVE_WITHIN_DAYS_ANNUAL == 540
+
+
+# ── CHANGE 1: ≥2016 horizon scoping (evidenced) ──────────────────────
+
+
+async def test_pre_horizon_reportdate_excluded_not_failing() -> None:
+    """A pre-horizon (pre-2016) SEC reportDate missing from fundamentals is
+    EXCLUDED-WITH-EVIDENCE (bucketed in excluded_pre_horizon, logged) — NOT
+    a per-ticker FAIL. The issuer's only post-horizon period is present, so
+    the ticker PASSES."""
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _evaluate,
+    )
+    recent = _TODAY - timedelta(days=30)
+    pre = date(2014, 3, 31)  # SEC filed it; fundamentals lacks it
+    iss = _Issuer(
+        "OLDCO", cid="c-oldco", cik="0000320193", primary="10-Q",
+        sec_report_dates=[pre, recent], have=[recent], asset_class="stock",
+    )
+    pool = _Pool([iss, *_clean_padding(3)])
+    result = await check_fundamentals_quarterly_completeness(pool)
+    # Pre-2016 gap is NOT a per-ticker failure.
+    assert [f for f in result.failures if f.ticker == "OLDCO"] == []
+    assert result.passed is True, [f.observed for f in result.failures]
+    # The exclusion is SURFACED (bucketed), not silently dropped.
+    ev = await _evaluate(pool)
+    assert ev.excluded_pre_horizon >= 1
+
+
+async def test_on_or_after_horizon_missing_still_fails() -> None:
+    """A reportDate ON/AFTER the horizon that is missing STILL FAILS — the
+    horizon never masks a recent gap. A pre-2016 reportDate in the same
+    issuer is excluded (bucketed) while the ≥2016 one fails (named)."""
+    pre = date(2015, 6, 30)
+    recent_missing = _TODAY - timedelta(days=120)
+    recent_have = _TODAY - timedelta(days=30)
+    iss = _Issuer(
+        "MIXCO", cid="c-mixco", cik="0000320193", primary="10-Q",
+        sec_report_dates=[pre, recent_missing, recent_have],
+        have=[recent_have], asset_class="stock",
+    )
+    result = await check_fundamentals_quarterly_completeness(_Pool([iss]))
+    assert result.passed is False
+    mix = [f for f in result.failures if f.ticker == "MIXCO"]
+    assert len(mix) == 1
+    # The ≥2016 missing reportDate is NAMED; the pre-2016 one is NOT.
+    assert recent_missing.isoformat() in mix[0].observed
+    assert pre.isoformat() not in mix[0].observed
+    # Only ONE (the post-horizon) reportDate is reported missing.
+    assert "1 SEC-filed reportDate(s) missing" in mix[0].observed
+
+
+async def test_horizon_env_override_widens_scope() -> None:
+    """The STE_FUNDAMENTALS_HORIZON env override is honoured at evaluation
+    time. Setting it earlier than a reportDate that the default would
+    exclude makes that reportDate in-scope (and therefore FAIL)."""
+    import os
+
+    pre = date(2014, 3, 31)
+    recent = _TODAY - timedelta(days=30)
+    iss = _Issuer(
+        "ENVCO", cid="c-envco", cik="0000320193", primary="10-Q",
+        sec_report_dates=[pre, recent], have=[recent], asset_class="stock",
+    )
+    old = os.environ.get("STE_FUNDAMENTALS_HORIZON")
+    try:
+        os.environ["STE_FUNDAMENTALS_HORIZON"] = "2010-01-01"
+        result = await check_fundamentals_quarterly_completeness(_Pool([iss]))
+        # With the horizon pushed back to 2010, the 2014 reportDate is now
+        # in-scope and missing → FAIL.
+        assert result.passed is False
+        envco = [f for f in result.failures if f.ticker == "ENVCO"]
+        assert len(envco) == 1
+        assert pre.isoformat() in envco[0].observed
+    finally:
+        if old is None:
+            os.environ.pop("STE_FUNDAMENTALS_HORIZON", None)
+        else:
+            os.environ["STE_FUNDAMENTALS_HORIZON"] = old
+
+
+def test_horizon_default_and_bad_env_falls_back() -> None:
+    """The default horizon is 2016-01-01; a malformed env override falls back
+    to the default (fail-safe — a bad env var must not silently move the
+    safety gate)."""
+    import os
+
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        FUNDAMENTALS_COMPLETENESS_HORIZON_DEFAULT as _DEFAULT,
+    )
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _resolve_horizon,
+    )
+    assert _DEFAULT == date(2016, 1, 1)
+    old = os.environ.get("STE_FUNDAMENTALS_HORIZON")
+    try:
+        os.environ["STE_FUNDAMENTALS_HORIZON"] = "not-a-date"
+        assert _resolve_horizon() == _DEFAULT
+        os.environ["STE_FUNDAMENTALS_HORIZON"] = "2018-07-01"
+        assert _resolve_horizon() == date(2018, 7, 1)
+    finally:
+        if old is None:
+            os.environ.pop("STE_FUNDAMENTALS_HORIZON", None)
+        else:
+            os.environ["STE_FUNDAMENTALS_HORIZON"] = old
+
+
+# ── CHANGE 2: non-operating-entity routing refinement ────────────────
+
+
+async def test_non_operating_etf_anchored_false_excluded_non_filer() -> None:
+    """An anchored=False ETF (asset_class='etf') has NO 10-Q obligation →
+    routes to excluded_non_filer (excluded-WITH-evidence), NOT
+    metadata_required (so it does not inflate the coverage sentinel)."""
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _evaluate,
+    )
+    # 4 CIK-backed ETFs that would have inflated metadata_required pre-change.
+    etfs = [
+        _Issuer(
+            f"ETF{i}", cid=f"c-etf-{i}", cik=f"00{i:05d}", primary="10-Q",
+            sec_report_dates=[], have=[], asset_class="etf",
+        )
+        for i in range(4)
+    ]
+    pool = _Pool([*etfs, *_clean_padding(1)])
+    ev = await _evaluate(pool)
+    assert ev.excluded_non_filer == 4
+    assert ev.excluded_metadata_required == 0
+    result = await check_fundamentals_quarterly_completeness(pool)
+    # No ETF is a per-ticker fail, AND the coverage sentinel does NOT fire
+    # (the funds were the only would-be metadata_required inflators).
+    assert [f for f in result.failures if f.ticker.startswith("ETF")] == []
+    assert [
+        f for f in result.failures
+        if f.reason == "metadata_coverage_insufficient"
+    ] == []
+    assert result.passed is True, [f.observed for f in result.failures]
+
+
+async def test_non_operating_fund_and_etn_excluded_non_filer() -> None:
+    """asset_class ∈ {fund, etn} also route to excluded_non_filer."""
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _evaluate,
+    )
+    nonop = [
+        _Issuer("AFUND", cid="c-afund", cik="0000111111", primary="10-Q",
+                sec_report_dates=[], have=[], asset_class="fund"),
+        _Issuer("AETN", cid="c-aetn", cik="0000222222", primary="10-Q",
+                sec_report_dates=[], have=[], asset_class="etn"),
+    ]
+    ev = await _evaluate(_Pool([*nonop, *_clean_padding(2)]))
+    assert ev.excluded_non_filer == 2
+    assert ev.excluded_metadata_required == 0
+
+
+async def test_operating_stock_anchored_false_stays_metadata_required() -> None:
+    """An anchored=False OPERATING company (asset_class='stock') that lacks
+    metadata STAYS metadata_required — a REAL coverage gap that MUST remain
+    sentinel-visible (NOT excluded as non-filer)."""
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _evaluate,
+    )
+    stocks = [
+        _Issuer(
+            f"STK{i}", cid=f"c-stk-{i}", cik=f"00{i:05d}", primary="10-Q",
+            sec_report_dates=[], have=[], asset_class="stock",
+        )
+        for i in range(4)
+    ]
+    pool = _Pool([*stocks, *_clean_padding(1)])
+    ev = await _evaluate(pool)
+    assert ev.excluded_metadata_required == 4
+    assert ev.excluded_non_filer == 0
+    result = await check_fundamentals_quarterly_completeness(pool)
+    # 4/(4+1) = 80% > 25% ⇒ the coverage sentinel MUST fire (real gap).
+    assert any(
+        f.reason == "metadata_coverage_insufficient" for f in result.failures
+    )
+
+
+async def test_operating_reit_anchored_false_stays_metadata_required() -> None:
+    """A REIT (asset_class='reit') is an OPERATING filer (10-K obligation) —
+    anchored=False ⇒ metadata_required, NOT excluded_non_filer."""
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _evaluate,
+    )
+    reit = _Issuer(
+        "AREIT", cid="c-areit", cik="0000333333", primary="10-K",
+        sec_report_dates=[], have=[], asset_class="reit",
+    )
+    ev = await _evaluate(_Pool([reit, *_clean_padding(3)]))
+    assert ev.excluded_metadata_required == 1
+    assert ev.excluded_non_filer == 0
+
+
+async def test_null_asset_class_fails_closed_to_metadata_required() -> None:
+    """A NULL asset_class is AMBIGUOUS — fail-closed: it is NOT classified
+    non-operating; it stays metadata_required (sentinel-visible)."""
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _evaluate,
+    )
+    null_ac = [
+        _Issuer(
+            f"NULLAC{i}", cid=f"c-nullac-{i}", cik=f"00{i:05d}", primary="10-Q",
+            sec_report_dates=[], have=[], asset_class=None,
+        )
+        for i in range(4)
+    ]
+    pool = _Pool([*null_ac, *_clean_padding(1)])
+    ev = await _evaluate(pool)
+    assert ev.excluded_metadata_required == 4
+    assert ev.excluded_non_filer == 0
+    result = await check_fundamentals_quarterly_completeness(pool)
+    assert any(
+        f.reason == "metadata_coverage_insufficient" for f in result.failures
+    )
+
+
+async def test_spac_anchored_false_not_excluded_non_filer() -> None:
+    """A SPAC (asset_class='spac') is NOT in the non-operating set: a
+    CIK-backed un-anchored SPAC stays metadata_required (sentinel-visible),
+    a CIK-less one stays confirmed_data_gap — neither is excluded_non_filer.
+    Report-how-SPACs-land: they route by their normal CIK-based path."""
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _evaluate,
+    )
+    spac_cik = _Issuer(
+        "SPACA", cid="c-spaca", cik="0000444444", primary="10-Q",
+        sec_report_dates=[], have=[], asset_class="spac",
+    )
+    spac_cikless = _Issuer(
+        "SPACB", cid="c-spacb", cik=None, primary="10-Q",
+        sec_report_dates=[], have=[], asset_class="spac",
+    )
+    ev = await _evaluate(_Pool([spac_cik, spac_cikless, *_clean_padding(3)]))
+    assert ev.excluded_non_filer == 0
+    assert ev.excluded_metadata_required == 1  # the CIK-backed SPAC
+    assert ev.excluded_confirmed_data_gap == 1  # the CIK-less SPAC
+
+
+async def test_non_operating_routing_precedes_cik_classification() -> None:
+    """A CIK-backed ETF lands in excluded_non_filer (NOT metadata_required)
+    AND a CIK-less ETF also lands in excluded_non_filer (NOT
+    confirmed_data_gap) — the non-operating evidence is dispositive
+    regardless of CIK presence."""
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _evaluate,
+    )
+    etf_cik = _Issuer(
+        "ETFA", cid="c-etfa", cik="0000555555", primary="10-Q",
+        sec_report_dates=[], have=[], asset_class="etf",
+    )
+    etf_cikless = _Issuer(
+        "ETFB", cid="c-etfb", cik=None, primary="10-Q",
+        sec_report_dates=[], have=[], asset_class="etf",
+    )
+    ev = await _evaluate(_Pool([etf_cik, etf_cikless, *_clean_padding(2)]))
+    assert ev.excluded_non_filer == 2
+    assert ev.excluded_metadata_required == 0
+    assert ev.excluded_confirmed_data_gap == 0

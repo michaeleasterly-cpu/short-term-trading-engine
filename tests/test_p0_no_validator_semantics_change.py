@@ -79,7 +79,12 @@ def test_filing_dates_sql_pinned_to_p3_shape() -> None:
         fqc._FILING_DATES_SQL.encode("utf-8"),
     ).hexdigest()
     assert sha == (
-        "3517b01ca565d3383d8586fcac881808426dbd77298bad322efc27482a3ac380"
+        # 2026-06-07: re-pinned after the non-operating-entity routing
+        # change added ``tc.asset_class`` to the universe SELECT (so the
+        # check can route anchored=False etf/etn/fund issuers to
+        # excluded_non_filer). The classification_id / cik / LEFT-JOIN
+        # anchoring contract this sentinel guards is unchanged.
+        "db4cf04c78114439c621ca0179e3208c423bd9550dd3a526c2e0fcbde5c57be7"
     ), (
         "fundamentals_quarterly_completeness._FILING_DATES_SQL changed "
         "from the P3 set-difference shape. If this is a deliberate next-"

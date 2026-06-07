@@ -532,8 +532,11 @@ def test_no_validator_threshold_change_source_sentinel() -> None:
         fqc._FILING_DATES_SQL.encode("utf-8"),
     ).hexdigest()
     # Matches the P3 pinned hash — same SQL, same byte-frozen contract.
+    # 2026-06-07: re-pinned for the non-operating-entity routing change
+    # (added ``tc.asset_class`` to the universe SELECT). Deliberate; the
+    # dry_run patch still does NOT alter validator semantics.
     assert sha == (
-        "3517b01ca565d3383d8586fcac881808426dbd77298bad322efc27482a3ac380"
+        "db4cf04c78114439c621ca0179e3208c423bd9550dd3a526c2e0fcbde5c57be7"
     ), (
         "fundamentals_quarterly_completeness._FILING_DATES_SQL drifted "
         "during the dry_run patch. The dry_run patch MUST NOT change "

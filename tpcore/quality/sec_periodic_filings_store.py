@@ -102,6 +102,17 @@ class FilingGapResult(BaseModel):
     ``False`` ⇒ no SEC periodic record exists, caller must NOT PASS;
     ``True`` ⇒ SEC evidence exists and ``missing_periods`` is the genuine
     set-difference (empty ⇒ PASS).
+
+    ``excluded_pre_horizon`` (added 2026-06-07) is the count of expected SEC
+    ``report_date`` values that fell BEFORE the caller-supplied ``horizon``
+    (when one is passed) and were therefore excluded from the gap. The
+    store stays POLICY-FREE: it does not know what the horizon *means* —
+    the horizon (and its rationale) is owned by the
+    ``fundamentals_quarterly_completeness`` check; the store merely applies
+    the filter and surfaces the per-issuer excluded count so the caller can
+    log the exclusion-with-evidence. Pre-horizon report_dates are
+    demonstrably real (they are in ``sec_periodic_filings``) — they are
+    excluded by documented policy, NOT silently dropped.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -109,6 +120,7 @@ class FilingGapResult(BaseModel):
     anchored: bool
     missing_periods: tuple[date, ...]
     routed_forms: frozenset[str]
+    excluded_pre_horizon: int = 0
 
 
 # ── Writer ─────────────────────────────────────────────────────────────
@@ -275,6 +287,7 @@ def _pure_gap(
     expected: set[date],
     have: set[date],
     routed_forms: frozenset[str],
+    horizon: date | None = None,
 ) -> FilingGapResult:
     """Anchored discriminator + fiscal-quarter-tolerant set-difference (no I/O).
 
@@ -291,18 +304,34 @@ def _pure_gap(
     un-anchored issuer carries an empty tuple AND ``anchored=False`` — the
     caller keys on ``anchored``, never treating an empty ``missing_periods`` as
     a PASS without checking ``anchored``.
+
+    ``horizon`` (caller-supplied, policy lives in the check): when not None,
+    any expected SEC ``report_date`` strictly BEFORE ``horizon`` is removed
+    from the gap computation and counted in ``excluded_pre_horizon`` instead.
+    A report_date ON/AFTER the horizon that is missing STILL fails — the
+    horizon only excludes pre-horizon SEC depth, never a recent gap. The
+    store applies the cut-off mechanically; it carries no opinion on the
+    horizon's value (the check owns the rationale + the constant).
     """
     if not anchored:
         return FilingGapResult(
             anchored=False, missing_periods=(), routed_forms=routed_forms,
+            excluded_pre_horizon=0,
         )
+    if horizon is not None:
+        in_scope = {rd for rd in expected if rd >= horizon}
+        excluded_pre_horizon = len(expected) - len(in_scope)
+    else:
+        in_scope = expected
+        excluded_pre_horizon = 0
     have_sorted = sorted(have)
     missing = tuple(
-        rd for rd in sorted(expected)
+        rd for rd in sorted(in_scope)
         if not _expected_is_satisfied(rd, have_sorted)
     )
     return FilingGapResult(
         anchored=True, missing_periods=missing, routed_forms=routed_forms,
+        excluded_pre_horizon=excluded_pre_horizon,
     )
 
 
@@ -310,6 +339,8 @@ async def compute_filing_gaps(
     conn: asyncpg.Connection,
     classification_ids: list[str],
     cadence_by_cid: dict[str, str],
+    *,
+    horizon: date | None = None,
 ) -> dict[str, FilingGapResult]:
     """SET-BASED gap compute over a universe of issuers.
 
@@ -327,6 +358,13 @@ async def compute_filing_gaps(
       * ``have`` ⇐ DISTINCT ``period_end_date`` from
         ``fundamentals_quarterly`` for the cid.
       * ``missing`` ⇐ ``sorted(expected - have)`` (only when anchored).
+
+    ``horizon`` (caller-supplied; policy owned by the completeness check):
+    when not None, expected report_dates strictly BEFORE the horizon are
+    excluded from ``missing`` and counted in ``FilingGapResult
+    .excluded_pre_horizon`` instead. The store stays policy-free — it merely
+    applies the cut-off the caller passes. ``None`` ⇒ the historical
+    behaviour (no horizon).
 
     CRITICAL: a cid with zero SEC rows ⇒ ``anchored=False`` (NOT
     ``missing=()``) — the false-green guard.
@@ -375,6 +413,7 @@ async def compute_filing_gaps(
             expected=expected_by_cid.get(cid, set()),
             have=have_by_cid.get(cid, set()),
             routed_forms=routed,
+            horizon=horizon,
         )
     return out
 
@@ -383,10 +422,17 @@ async def compute_filing_gap(
     conn: asyncpg.Connection,
     classification_id: str,
     cadence: Literal["quarterly", "annual"],
+    *,
+    horizon: date | None = None,
 ) -> FilingGapResult:
-    """Single-issuer convenience wrapper over :func:`compute_filing_gaps`."""
+    """Single-issuer convenience wrapper over :func:`compute_filing_gaps`.
+
+    ``horizon`` is forwarded unchanged (policy-free pass-through); see
+    :func:`compute_filing_gaps`.
+    """
     result = await compute_filing_gaps(
         conn, [classification_id], {classification_id: cadence},
+        horizon=horizon,
     )
     return result.get(
         classification_id,
