@@ -1,27 +1,23 @@
-"""P1 — fundamentals_quarterly_completeness cadence-routed tests.
+"""P1 → P3 — fundamentals_quarterly_completeness routing tests.
 
-Hermetic tests of the new 5-state routing logic, using a mocked
-asyncpg pool that returns synthetic filing rows. NO database access.
+**P3 rewrite (2026-06-07)** — the gap is now an AUTHORITATIVE
+set-difference against ``platform.sec_periodic_filings`` (shared store
+``compute_filing_gaps``), not the P1 even-spacing interpolation. The
+CADENCE-ROUTING behavior these tests cover (10-Q ⇒ quarterly; 10-K /
+20-F / 40-F ⇒ annual; NULL ⇒ METADATA_REQUIRED; non-routed ⇒ OTHER_FORM;
+per-cadence liveness; metadata-coverage sentinel; repair-target scoping)
+is preserved; the gap tests are re-expressed in the new substrate model
+(SEC-filed reportDates vs fundamentals period_end_dates) so a gap is a
+real set-difference, not an interpolated guess.
 
-Coverage matrix:
-  TEST-P1-01  10-Q filer with no gaps             → PASS
-  TEST-P1-02  10-Q filer with a >100-day gap      → FAIL (missing_period_10-Q)
-  TEST-P1-03  20-F filer with no gaps             → PASS (NOT false-FAIL'd)
-  TEST-P1-04  20-F filer with a 470-day gap       → FAIL (missing_period_20-F)
-  TEST-P1-05  20-F filer with a 380-day gap       → PASS (within 450-day cap)
-  TEST-P1-06  40-F filer routes as annual         → PASS at 365-day gap
-  TEST-P1-07  NULL doctype → METADATA_REQUIRED bucket (NOT a per-ticker FAIL)
-  TEST-P1-08  '6-K' primary → excluded_other_form bucket (NOT a per-ticker FAIL)
-  TEST-P1-09  cadence-routed liveness: 20-F filer 200 days silent → still routed
-              (would be dark under pre-P1 LIVE_WITHIN_DAYS=120; under P1 it lives)
-  TEST-P1-10  metadata-coverage sentinel fires at >25% NULL
-  TEST-P1-11  metadata-coverage sentinel does NOT fire at <25% NULL
-  TEST-P1-12  compute_fundamentals_repair_targets returns ONLY routed-FAIL
-              tickers (NEVER metadata-required / confirmed-data-gap / sentinels)
+Hermetic — no DB access; a substrate-aware fake pool dispatches each SQL
+by substring to the configured (universe / SEC reportDates / fundamentals
+have) row sets.
 """
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -42,10 +38,89 @@ def _today() -> date:
     return datetime.now(UTC).date()
 
 
-def _mock_pool(rows: list[dict]) -> MagicMock:
-    """asyncpg.Pool stub whose ``acquire().fetch(_SQL, $1)`` yields rows."""
+class _Spec:
+    """One issuer's substrate footprint.
+
+    ``primary`` routes cadence; ``sec`` is what SEC FILED (``expected``);
+    ``have`` is the present fundamentals period_end_dates. ``cik`` defaults
+    present (a CIK-backed issuer); pass ``cik=None`` for a CIK-less name.
+    Anchored iff ``sec`` is non-empty.
+    """
+
+    def __init__(
+        self,
+        ticker: str,
+        primary: str | None,
+        *,
+        sec: list[date] | None = None,
+        have: list[date] | None = None,
+        cik: str | None = "0001",
+    ) -> None:
+        self.ticker = ticker
+        self.primary = primary
+        self.cik = cik
+        self.sec = sec or []
+        self.have = have if have is not None else list(self.sec)
+        self.cid = f"c-{ticker}"
+
+
+def _mock_pool(specs: list[_Spec]) -> MagicMock:
+    """Substrate-aware asyncpg.Pool stub dispatching by SQL substring."""
+    by_cid = {s.cid: s for s in specs}
+
+    async def _fetch(sql: str, *args: Any) -> list[dict[str, Any]]:
+        # Universe SQL (the check's _FILING_DATES_SQL).
+        if "WITH liquid AS" in sql:
+            out: list[dict[str, Any]] = []
+            for s in specs:
+                base = {
+                    "ticker": s.ticker,
+                    "classification_id": s.cid,
+                    "cik": s.cik,
+                    "sec_document_type_primary": s.primary,
+                    "issuer_lifecycle_state": None,
+                    "issuer_lifecycle_event_date": None,
+                }
+                if s.have:
+                    for pe in sorted(s.have):
+                        out.append({**base, "period_end_date": pe})
+                else:
+                    out.append({**base, "period_end_date": None})
+            return out
+        # Store _ANCHORED_SQL.
+        if "SELECT DISTINCT classification_id" in sql:
+            wanted = set(args[0])
+            return [
+                {"classification_id": cid}
+                for cid in wanted
+                if by_cid[cid].sec
+            ]
+        # Store _EXPECTED_SQL (SEC reportDates).
+        if "FROM platform.sec_periodic_filings" in sql:
+            wanted = set(args[0])
+            out = []
+            for cid in wanted:
+                for rd in by_cid[cid].sec:
+                    out.append({"classification_id": cid, "report_date": rd})
+            return out
+        # Store _HAVE_SQL (fundamentals period_end_dates).
+        if ("FROM platform.fundamentals_quarterly" in sql
+                and "classification_id = ANY" in sql):
+            wanted = set(args[0])
+            out = []
+            for cid in wanted:
+                for pe in by_cid[cid].have:
+                    out.append(
+                        {"classification_id": cid, "period_end_date": pe}
+                    )
+            return out
+        # Evidence-join SQL — no dual-source evidence in these tests.
+        if "confirmed_data_gap_evidence" in sql:
+            return []
+        raise AssertionError(f"unexpected SQL: {sql[:80]}")
+
     conn = MagicMock()
-    conn.fetch = AsyncMock(return_value=rows)
+    conn.fetch = AsyncMock(side_effect=_fetch)
     acquire = MagicMock()
     acquire.__aenter__ = AsyncMock(return_value=conn)
     acquire.__aexit__ = AsyncMock(return_value=None)
@@ -54,12 +129,14 @@ def _mock_pool(rows: list[dict]) -> MagicMock:
     return pool
 
 
-def _row(ticker: str, period_end: date, primary: str | None) -> dict:
-    return {
-        "ticker": ticker,
-        "period_end_date": period_end,
-        "sec_document_type_primary": primary,
-    }
+def _qends(today: date, n: int) -> list[date]:
+    """n recent quarter-ends (most recent ~30d ago), oldest first."""
+    return [today - timedelta(days=30 + 91 * i) for i in range(n)][::-1]
+
+
+def _annual(today: date, n: int) -> list[date]:
+    """n recent annual reportDates (most recent ~30d ago), oldest first."""
+    return [today - timedelta(days=30 + 365 * i) for i in range(n)][::-1]
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -67,20 +144,23 @@ def _row(ticker: str, period_end: date, primary: str | None) -> dict:
 # ─────────────────────────────────────────────────────────────────────
 
 
+# Padding: clean 10-Q filers (full data) to keep the coverage sentinel
+# silent in routing/dark tests that aren't about coverage.
+def _clean(today: date, n: int) -> list[_Spec]:
+    rd = _qends(today, 4)
+    return [
+        _Spec(f"R{i}", "10-Q", sec=rd, have=rd, cik=f"00{i:04d}")
+        for i in range(n)
+    ]
+
+
 @pytest.mark.asyncio
 async def test_p1_01_10q_no_gaps_passes() -> None:
-    """A 10-Q filer with quarterly filings (≤100 day gaps) PASSES,
-    contributes to evaluated_routed + by_form['10-Q'] = 1."""
+    """A 10-Q filer whose fundamentals has every SEC-filed reportDate
+    PASSES (anchored=True, missing_periods=())."""
     today = _today()
-    # 4 quarterly filings ending within the liveness window.
-    rows = [
-        _row("AAPL", today - timedelta(days=300), "10-Q"),
-        _row("AAPL", today - timedelta(days=210), "10-Q"),
-        _row("AAPL", today - timedelta(days=120), "10-Q"),
-        _row("AAPL", today - timedelta(days=30),  "10-Q"),
-    ]
-    pool = _mock_pool(rows)
-    # We're sole ticker → coverage_ratio=0 → no sentinel
+    rd = _qends(today, 4)
+    pool = _mock_pool([_Spec("AAPL", "10-Q", sec=rd, have=rd)])
     result = await check_fundamentals_quarterly_completeness(pool)
     assert result.passed is True
     assert result.failed == 0
@@ -88,16 +168,12 @@ async def test_p1_01_10q_no_gaps_passes() -> None:
 
 @pytest.mark.asyncio
 async def test_p1_02_10q_with_gap_fails_missing_period_10q() -> None:
-    """A 10-Q filer with a > 100-day gap between filings FAILS with
-    ``missing_period_10-Q``."""
+    """A 10-Q filer missing a SEC-filed reportDate FAILS with
+    ``missing_period_10-Q`` (the genuine set-difference)."""
     today = _today()
-    rows = [
-        _row("AAPL", today - timedelta(days=400), "10-Q"),
-        # 200-day gap below → missing quarter inferred.
-        _row("AAPL", today - timedelta(days=200), "10-Q"),
-        _row("AAPL", today - timedelta(days=30),  "10-Q"),
-    ]
-    pool = _mock_pool(rows)
+    rd = _qends(today, 4)
+    have = [d for d in rd if d != rd[1]]  # missing one filed period
+    pool = _mock_pool([_Spec("AAPL", "10-Q", sec=rd, have=have)])
     result = await check_fundamentals_quarterly_completeness(pool)
     assert result.passed is False
     assert any(
@@ -108,16 +184,11 @@ async def test_p1_02_10q_with_gap_fails_missing_period_10q() -> None:
 
 @pytest.mark.asyncio
 async def test_p1_03_20f_no_gaps_passes() -> None:
-    """A 20-F filer with annual filings at ~365-day intervals PASSES.
-    This is the dispositive P1 fix: pre-P1 this ticker would FAIL as
-    missing_quarter; P1 routes by 20-F → annual → 450-day max gap."""
+    """A 20-F filer routed annual with all SEC-filed reportDates present
+    PASSES — pre-P1 this ticker false-FAILed as missing_quarter."""
     today = _today()
-    rows = [
-        _row("AER", today - timedelta(days=730), "20-F"),
-        _row("AER", today - timedelta(days=365), "20-F"),
-        _row("AER", today - timedelta(days=30),  "20-F"),
-    ]
-    pool = _mock_pool(rows)
+    rd = _annual(today, 3)
+    pool = _mock_pool([_Spec("AER", "20-F", sec=rd, have=rd)])
     result = await check_fundamentals_quarterly_completeness(pool)
     assert result.passed is True
     assert result.failed == 0
@@ -125,16 +196,12 @@ async def test_p1_03_20f_no_gaps_passes() -> None:
 
 @pytest.mark.asyncio
 async def test_p1_04_20f_with_year_skip_fails_missing_period_20f() -> None:
-    """A 20-F filer with a > 450-day gap between filings FAILS with
+    """A 20-F filer missing one SEC-filed annual reportDate FAILS with
     ``missing_period_20-F``."""
     today = _today()
-    rows = [
-        _row("AER", today - timedelta(days=900), "20-F"),
-        # 460-day gap below → year-skip inferred.
-        _row("AER", today - timedelta(days=440), "20-F"),
-        _row("AER", today - timedelta(days=30),  "20-F"),
-    ]
-    pool = _mock_pool(rows)
+    rd = _annual(today, 3)
+    have = [d for d in rd if d != rd[0]]  # missing the oldest filed year
+    pool = _mock_pool([_Spec("AER", "20-F", sec=rd, have=have)])
     result = await check_fundamentals_quarterly_completeness(pool)
     assert result.passed is False
     assert any(
@@ -144,16 +211,12 @@ async def test_p1_04_20f_with_year_skip_fails_missing_period_20f() -> None:
 
 
 @pytest.mark.asyncio
-async def test_p1_05_20f_within_annual_cap_passes() -> None:
-    """A 20-F filer with a 380-day gap (within 450-day annual cap)
-    PASSES — covers the legitimate-late-filer case the constant was
-    sized for."""
+async def test_p1_05_20f_complete_history_passes() -> None:
+    """A 20-F filer with two SEC-filed annual reportDates both present
+    PASSES (no fabricated gap from a long-but-real annual interval)."""
     today = _today()
-    rows = [
-        _row("AER", today - timedelta(days=380), "20-F"),
-        _row("AER", today - timedelta(days=15),  "20-F"),
-    ]
-    pool = _mock_pool(rows)
+    rd = _annual(today, 2)
+    pool = _mock_pool([_Spec("AER", "20-F", sec=rd, have=rd)])
     result = await check_fundamentals_quarterly_completeness(pool)
     assert result.passed is True
 
@@ -166,12 +229,8 @@ async def test_p1_05_20f_within_annual_cap_passes() -> None:
 @pytest.mark.asyncio
 async def test_p1_06_40f_routes_as_annual() -> None:
     today = _today()
-    rows = [
-        _row("ASTL", today - timedelta(days=730), "40-F"),
-        _row("ASTL", today - timedelta(days=365), "40-F"),
-        _row("ASTL", today - timedelta(days=30),  "40-F"),
-    ]
-    pool = _mock_pool(rows)
+    rd = _annual(today, 3)
+    pool = _mock_pool([_Spec("ASTL", "40-F", sec=rd, have=rd)])
     result = await check_fundamentals_quarterly_completeness(pool)
     assert result.passed is True
 
@@ -183,27 +242,16 @@ async def test_p1_06_40f_routes_as_annual() -> None:
 
 @pytest.mark.asyncio
 async def test_p1_07_null_doctype_routes_to_metadata_required() -> None:
-    """NULL primary form → METADATA_REQUIRED bucket. Does NOT
-    contribute a per-ticker FailureDetail (those are cadence
-    failures only). But the coverage-ratio sentinel fires if NULL
-    >25%."""
+    """NULL primary form → METADATA_REQUIRED bucket; not a per-ticker
+    FAIL. 1 NULL + 4 routed-clean → 1/5 = 20% < 25% → no sentinel."""
     today = _today()
-    rows = [
-        _row("UNKNOWN", today - timedelta(days=200), None),
-        _row("UNKNOWN", today - timedelta(days=50),  None),
-        # Add 4 routed-eligible tickers so the coverage ratio is 1/5=20%
-        # and the sentinel does NOT fire (testing only the routing
-        # mechanic here, not the sentinel — see TEST-P1-10).
-        _row("A", today - timedelta(days=60), "10-Q"),
-        _row("B", today - timedelta(days=60), "10-Q"),
-        _row("C", today - timedelta(days=60), "10-Q"),
-        _row("D", today - timedelta(days=60), "10-Q"),
+    specs = [
+        _Spec("UNKNOWN", None),
+        *_clean(today, 4),
     ]
-    pool = _mock_pool(rows)
+    pool = _mock_pool(specs)
     result = await check_fundamentals_quarterly_completeness(pool)
-    # No per-ticker FAIL for UNKNOWN (it's excluded, not failed) AND
-    # coverage 1/5=20% < 25% threshold → no metadata-coverage sentinel.
-    assert result.passed is True
+    assert result.passed is True, [f.observed for f in result.failures]
     assert not any(f.ticker == "UNKNOWN" for f in result.failures)
 
 
@@ -214,18 +262,13 @@ async def test_p1_07_null_doctype_routes_to_metadata_required() -> None:
 
 @pytest.mark.asyncio
 async def test_p1_08_six_k_primary_routes_to_other_form() -> None:
-    """A ticker whose extract_filing_metadata picked '6-K' as primary
-    (rare — pathological for the operator's universe). Excluded from
-    the routed denominator, NOT a per-ticker FAIL."""
+    """A '6-K' primary is non-routed → OTHER_FORM bucket; not a
+    per-ticker FAIL and not metadata-required."""
     today = _today()
-    rows = [
-        _row("SIXK", today - timedelta(days=100), "6-K"),
-        # Provide enough routed-eligible to avoid metadata sentinel.
-        *(_row(f"R{i}", today - timedelta(days=60), "10-Q") for i in range(5)),
-    ]
-    pool = _mock_pool(rows)
+    specs = [_Spec("SIXK", "6-K"), *_clean(today, 5)]
+    pool = _mock_pool(specs)
     result = await check_fundamentals_quarterly_completeness(pool)
-    assert result.passed is True
+    assert result.passed is True, [f.observed for f in result.failures]
     assert not any(f.ticker == "SIXK" for f in result.failures)
 
 
@@ -236,17 +279,13 @@ async def test_p1_08_six_k_primary_routes_to_other_form() -> None:
 
 @pytest.mark.asyncio
 async def test_p1_09_annual_liveness_window_covers_200_day_silent_20f() -> None:
-    """Pre-P1, a 20-F filer 200 days past their last filing would be
-    EXCLUDED_DARK (120-day window). P1 widens the annual window to
-    540 so they remain routed and properly judged."""
+    """A 20-F filer 200 days past their last filing is NOT dark
+    (LIVE_WITHIN_DAYS_ANNUAL=540) and PASSES with every SEC reportDate
+    present."""
     today = _today()
-    rows = [
-        _row("AER", today - timedelta(days=560), "20-F"),
-        _row("AER", today - timedelta(days=200), "20-F"),
-    ]
-    pool = _mock_pool(rows)
+    rd = [today - timedelta(days=560), today - timedelta(days=200)]
+    pool = _mock_pool([_Spec("AER", "20-F", sec=rd, have=rd)])
     result = await check_fundamentals_quarterly_completeness(pool)
-    # 360-day gap < 450 → no FAIL; 200-day silence < 540 → not dark.
     assert result.passed is True
 
 
@@ -258,18 +297,11 @@ async def test_p1_09_annual_liveness_window_covers_200_day_silent_20f() -> None:
 @pytest.mark.asyncio
 async def test_p1_10_metadata_sentinel_fires_above_threshold() -> None:
     """30% NULL coverage (> 25% threshold) fires the metadata-coverage
-    structural sentinel as a synthetic ``<metadata_coverage>``
-    FailureDetail."""
+    structural sentinel as a synthetic ``<metadata_coverage>`` failure."""
     today = _today()
-    # 3 NULL + 7 routed-eligible 10-Q → 3/10 = 30% NULL → sentinel.
-    rows = []
-    for i in range(3):
-        rows.append(_row(f"NULL{i}", today - timedelta(days=60), None))
-        rows.append(_row(f"NULL{i}", today - timedelta(days=10), None))
-    for i in range(7):
-        rows.append(_row(f"R{i}", today - timedelta(days=60), "10-Q"))
-        rows.append(_row(f"R{i}", today - timedelta(days=10), "10-Q"))
-    pool = _mock_pool(rows)
+    specs = [_Spec(f"NULL{i}", None) for i in range(3)]
+    specs += _clean(today, 7)  # 3/10 = 30% NULL → sentinel
+    pool = _mock_pool(specs)
     result = await check_fundamentals_quarterly_completeness(pool)
     assert result.passed is False
     sentinel_failures = [
@@ -282,15 +314,10 @@ async def test_p1_10_metadata_sentinel_fires_above_threshold() -> None:
 
 @pytest.mark.asyncio
 async def test_p1_11_metadata_sentinel_silent_below_threshold() -> None:
-    """20% NULL coverage (< 25% threshold) does NOT fire the
-    structural sentinel."""
+    """20% NULL coverage (< 25% threshold) does NOT fire the sentinel."""
     today = _today()
-    # 1 NULL + 4 routed-eligible 10-Q → 1/5 = 20% NULL → no sentinel.
-    rows = [_row("NULL0", today - timedelta(days=10), None)]
-    for i in range(4):
-        rows.append(_row(f"R{i}", today - timedelta(days=60), "10-Q"))
-        rows.append(_row(f"R{i}", today - timedelta(days=10), "10-Q"))
-    pool = _mock_pool(rows)
+    specs = [_Spec("NULL0", None), *_clean(today, 4)]  # 1/5 = 20%
+    pool = _mock_pool(specs)
     result = await check_fundamentals_quarterly_completeness(pool)
     assert result.passed is True
     assert not any(
@@ -307,26 +334,18 @@ async def test_p1_11_metadata_sentinel_silent_below_threshold() -> None:
 @pytest.mark.asyncio
 async def test_p1_12_repair_targets_only_routed_fails() -> None:
     """``compute_fundamentals_repair_targets`` returns ONLY tickers
-    with cadence-FAIL gaps. It NEVER returns METADATA_REQUIRED,
-    OTHER_FORM, CONFIRMED_DATA_GAP, or sentinel synthetic tickers.
-
-    Operator hard rule: ``fundamentals_refresh`` re-pulls would burn
-    the SEC budget for nothing on metadata-required tickers (the right
-    fix is ``backfill_sec_metadata``, not fundamentals re-pull)."""
+    with a genuine set-difference gap; NEVER METADATA_REQUIRED,
+    OTHER_FORM, CONFIRMED_DATA_GAP, or sentinel synthetic tickers."""
     today = _today()
-    rows = [
-        # Cadence FAIL — should be a repair target.
-        _row("FAIL10Q", today - timedelta(days=400), "10-Q"),
-        _row("FAIL10Q", today - timedelta(days=200), "10-Q"),
-        _row("FAIL10Q", today - timedelta(days=30),  "10-Q"),
-        # NULL — METADATA_REQUIRED, NOT a repair target.
-        _row("NULL1", today - timedelta(days=10), None),
-        # 6-K — OTHER_FORM, NOT a repair target.
-        _row("SIXK1", today - timedelta(days=10), "6-K"),
-        # Dummy routed-PASS so coverage ratio is fine.
-        *(_row(f"R{i}", today - timedelta(days=60), "10-Q") for i in range(5)),
+    rd = _qends(today, 4)
+    specs = [
+        # Genuine gap — should be a repair target.
+        _Spec("FAIL10Q", "10-Q", sec=rd, have=[d for d in rd if d != rd[1]]),
+        _Spec("NULL1", None),       # METADATA_REQUIRED, not a target
+        _Spec("SIXK1", "6-K"),      # OTHER_FORM, not a target
+        *_clean(today, 5),          # routed-PASS padding
     ]
-    pool = _mock_pool(rows)
+    pool = _mock_pool(specs)
     targets, lookback = await compute_fundamentals_repair_targets(pool)
     assert targets == ["FAIL10Q"]
     assert "NULL1" not in targets
@@ -336,25 +355,22 @@ async def test_p1_12_repair_targets_only_routed_fails() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────
-# Excluded-dark coverage — pre-P1 LIVE_WITHIN_DAYS=120 silently
-# darkened annual filers; P1 widens per cadence. These tests confirm
-# the per-cadence darkening is correct (NOT routed-FAIL).
+# Excluded-dark coverage — per-cadence darkening (NOT routed-FAIL).
 # ─────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_p1_dark_20f_filer_600_days_silent_is_excluded_not_failed() -> None:
     """A 20-F filer 600 days past their last filing exceeds
-    LIVE_WITHIN_DAYS_ANNUAL=540 → excluded_dark, NOT routed-FAIL.
-    Adding routed-eligible filler so coverage sentinel stays silent."""
+    LIVE_WITHIN_DAYS_ANNUAL=540 → excluded_dark, NOT routed-FAIL — even
+    though SEC filed a reportDate fundamentals lacks."""
     today = _today()
-    rows = [
-        _row("DARK20F", today - timedelta(days=900), "20-F"),
-        _row("DARK20F", today - timedelta(days=600), "20-F"),
-        # Fillers so the routed denominator > 0.
-        *(_row(f"R{i}", today - timedelta(days=60), "10-Q") for i in range(5)),
+    rd = [today - timedelta(days=900), today - timedelta(days=600)]
+    specs = [
+        _Spec("DARK20F", "20-F", sec=rd, have=[rd[0]]),  # would gap if live
+        *_clean(today, 5),
     ]
-    pool = _mock_pool(rows)
+    pool = _mock_pool(specs)
     result = await check_fundamentals_quarterly_completeness(pool)
     assert result.passed is True
     assert not any(f.ticker == "DARK20F" for f in result.failures)
@@ -365,13 +381,12 @@ async def test_p1_dark_10q_filer_200_days_silent_is_excluded_not_failed() -> Non
     """A 10-Q filer 200 days silent exceeds LIVE_WITHIN_DAYS_QUARTERLY=120
     → excluded_dark, NOT routed-FAIL."""
     today = _today()
-    rows = [
-        _row("DARK10Q", today - timedelta(days=400), "10-Q"),
-        _row("DARK10Q", today - timedelta(days=200), "10-Q"),
-        # Fillers.
-        *(_row(f"R{i}", today - timedelta(days=60), "10-Q") for i in range(5)),
+    rd = [today - timedelta(days=400), today - timedelta(days=200)]
+    specs = [
+        _Spec("DARK10Q", "10-Q", sec=rd, have=[rd[0]]),
+        *_clean(today, 5),
     ]
-    pool = _mock_pool(rows)
+    pool = _mock_pool(specs)
     result = await check_fundamentals_quarterly_completeness(pool)
     assert result.passed is True
     assert not any(f.ticker == "DARK10Q" for f in result.failures)

@@ -43,28 +43,66 @@ from tpcore.ingestion.handlers import handle_sec_fundamentals_fallback
 
 def _mock_pool(
     universe_rows: list[dict],
-    per_ticker_existing_periods: dict[str, list[date]] | None = None,
+    sec_report_dates: dict[str, list[date]] | None = None,
+    fundamentals_have: dict[str, list[date]] | None = None,
 ) -> MagicMock:
-    """asyncpg.Pool stub:
+    """asyncpg.Pool stub (P3 set-difference healer).
 
-      * First fetch (universe SQL) → ``universe_rows``.
-      * Subsequent fetches (one per ticker, ``_missing_periods_for``)
-        → the configured existing periods for that ticker; an EMPTY
-        list means no prior history (handler returns no missing
-        candidates → ticker lands in ``nothing_to_fill``).
+      * Universe SQL (``WITH liquid``-free; ``FROM platform
+        .ticker_classifications``) → ``universe_rows``.
+      * The healer's ``_missing_periods_for`` now delegates to the shared
+        store's ``compute_filing_gap`` which issues, keyed on
+        classification_id:
+          - ``_ANCHORED_SQL`` (DISTINCT classification_id from
+            sec_periodic_filings) — a cid is anchored iff it has any SEC
+            reportDate configured here;
+          - ``_EXPECTED_SQL`` (report_date from sec_periodic_filings) —
+            the issuer's SEC-filed reportDates (``expected``);
+          - ``_HAVE_SQL`` (period_end_date from fundamentals_quarterly) —
+            the issuer's present fundamentals periods (``have``).
+        The healer returns ``expected - have`` (when anchored); the
+        handler then calls ``extract_period`` once per missing period.
 
-    The handler reuses the same pool for the universe scan + each
-    per-ticker missing-periods probe (different SQL strings), so we
-    dispatch on the SQL substring.
+    Both dicts are keyed by ticker; the universe rows carry the ticker →
+    classification_id mapping (cid = ``c-<ticker>``) so the store SQLs
+    (which receive cids) resolve back to the per-ticker config.
     """
-    per_ticker = per_ticker_existing_periods or {}
+    sec = sec_report_dates or {}
+    have = fundamentals_have or {}
+    # ticker → cid and cid → ticker from the universe rows.
+    cid_by_ticker = {r["ticker"]: r["classification_id"] for r in universe_rows}
+    ticker_by_cid = {v: k for k, v in cid_by_ticker.items()}
 
     async def _fetch(sql: str, *args: Any) -> list[dict[str, Any]]:
         if "FROM platform.ticker_classifications" in sql:
             return universe_rows
-        if "FROM platform.fundamentals_quarterly" in sql:
-            t = args[0]
-            return [{"period_end_date": pe} for pe in per_ticker.get(t, [])]
+        # Store _ANCHORED_SQL — DISTINCT classification_id where SEC rows.
+        if "SELECT DISTINCT classification_id" in sql:
+            wanted = set(args[0])
+            return [
+                {"classification_id": cid}
+                for cid in wanted
+                if sec.get(ticker_by_cid.get(cid, ""))
+            ]
+        # Store _EXPECTED_SQL — SEC reportDates per cid.
+        if "FROM platform.sec_periodic_filings" in sql:
+            wanted = set(args[0])
+            out: list[dict[str, Any]] = []
+            for cid in wanted:
+                for rd in sec.get(ticker_by_cid.get(cid, ""), []):
+                    out.append({"classification_id": cid, "report_date": rd})
+            return out
+        # Store _HAVE_SQL — fundamentals period_end_dates per cid.
+        if ("FROM platform.fundamentals_quarterly" in sql
+                and "classification_id = ANY" in sql):
+            wanted = set(args[0])
+            out = []
+            for cid in wanted:
+                for pe in have.get(ticker_by_cid.get(cid, ""), []):
+                    out.append(
+                        {"classification_id": cid, "period_end_date": pe}
+                    )
+            return out
         return []
 
     conn = MagicMock()
@@ -133,14 +171,31 @@ def _full_extraction() -> dict:
     }
 
 
-def _ticker_universe_rows(pairs: list[tuple[str, str]]) -> list[dict]:
-    return [{"ticker": t, "cik": c} for t, c in pairs]
+def _ticker_universe_rows(
+    pairs: list[tuple[str, str]], primary: str = "10-Q",
+) -> list[dict]:
+    """P3: the healer's universe SQL now selects classification_id +
+    sec_document_type_primary. cid = ``c-<ticker>`` so the store SQLs
+    resolve back to per-ticker config in ``_mock_pool``."""
+    return [
+        {
+            "ticker": t, "cik": c,
+            "classification_id": f"c-{t}",
+            "sec_document_type_primary": primary,
+        }
+        for t, c in pairs
+    ]
 
 
-def _existing_periods_with_gap(end_a: date, end_b: date) -> list[date]:
-    """Two anchor dates spanning a quarterly gap so
-    ``_missing_periods_for`` enumerates ≥1 missing period in between."""
-    return [end_a, end_b]
+def _gap_of(n_missing: int) -> tuple[list[date], list[date]]:
+    """Return (sec_report_dates, fundamentals_have) for a quarterly issuer
+    where the SEC filed N+ reportDates and fundamentals is missing exactly
+    ``n_missing`` of them (the OLDEST ``n_missing``). The set-difference
+    healer then enumerates exactly ``n_missing`` periods to re-pull."""
+    base = date(2024, 3, 31)
+    sec = [base, date(2024, 6, 30), date(2024, 9, 30), date(2024, 12, 31)]
+    have = sec[n_missing:]  # drop the oldest n → those are the gap
+    return sec, have
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -149,14 +204,14 @@ def _existing_periods_with_gap(end_a: date, end_b: date) -> list[date]:
 
 
 async def test_dry_run_true_does_not_call_manifest_lifecycle() -> None:
+    _sec_rd, _have = _gap_of(2)
     pool = _mock_pool(
         universe_rows=_ticker_universe_rows([("AAA", "1111")]),
-        # Two anchor periods spanning a >100-day gap → handler will
-        # enumerate at least one missing period and call
-        # extract_period for it.
-        per_ticker_existing_periods={
-            "AAA": _existing_periods_with_gap(date(2023, 3, 31), date(2024, 3, 31)),
-        },
+        # SEC filed 4 reportDates; fundamentals is missing the oldest 2 →
+        # the set-difference healer enumerates 2 missing periods and calls
+        # extract_period for each.
+        sec_report_dates={"AAA": _sec_rd},
+        fundamentals_have={"AAA": _have},
     )
     fake_sec = _FakeSEC(
         facts_by_cik={"1111": {"facts": {"us-gaap": {}}}},
@@ -195,11 +250,11 @@ async def test_dry_run_true_does_not_call_manifest_lifecycle() -> None:
 
 
 async def test_dry_run_true_does_not_call_cache_upsert_payload() -> None:
+    _sec_rd, _have = _gap_of(2)
     pool = _mock_pool(
         universe_rows=_ticker_universe_rows([("AAA", "1111")]),
-        per_ticker_existing_periods={
-            "AAA": _existing_periods_with_gap(date(2023, 3, 31), date(2024, 3, 31)),
-        },
+        sec_report_dates={"AAA": _sec_rd},
+        fundamentals_have={"AAA": _have},
     )
     fake_sec = _FakeSEC(
         facts_by_cik={"1111": {"facts": {}}},
@@ -235,27 +290,24 @@ async def test_dry_run_true_does_not_call_cache_upsert_payload() -> None:
 
 
 async def test_dry_run_true_returns_archive_rows_planned() -> None:
-    # Two tickers; each will extract 3 archive rows. The handler
-    # generates missing periods between two anchor dates (Mar 2022 →
-    # Mar 2024 spans 8 quarters → 7 candidate quarter-ends). We supply
-    # 3 extraction successes + Nones for the rest so each ticker
-    # appends exactly 3 archive rows.
+    # Two tickers; each has SEC-filed 4 reportDates and fundamentals is
+    # missing the oldest 3 → the set-difference healer enumerates exactly
+    # 3 missing periods per ticker. We supply 3 extraction successes per
+    # ticker so each appends exactly 3 archive rows.
+    _sec_rd, _have = _gap_of(3)
     pool = _mock_pool(
         universe_rows=_ticker_universe_rows(
             [("AAA", "1111"), ("BBB", "2222")]
         ),
-        per_ticker_existing_periods={
-            "AAA": _existing_periods_with_gap(date(2022, 3, 31), date(2024, 3, 31)),
-            "BBB": _existing_periods_with_gap(date(2022, 3, 31), date(2024, 3, 31)),
-        },
+        sec_report_dates={"AAA": _sec_rd, "BBB": _sec_rd},
+        fundamentals_have={"AAA": _have, "BBB": _have},
     )
-    # Per ticker: 3 populated + many Nones; cycle the extractions
-    # across BOTH tickers because the fake's index is shared.
+    # Per ticker: exactly 3 missing periods → 3 extract calls; the fake's
+    # index is shared across both tickers.
     one = _full_extraction()
-    n = None
     extractions: list[dict | None] = [
-        one, one, one, n, n, n, n,   # AAA
-        one, one, one, n, n, n, n,   # BBB
+        one, one, one,   # AAA (3 missing)
+        one, one, one,   # BBB (3 missing)
     ]
     fake_sec = _FakeSEC(
         facts_by_cik={"1111": {"facts": {}}, "2222": {"facts": {}}},
@@ -286,11 +338,11 @@ async def test_dry_run_true_returns_archive_rows_planned() -> None:
 
 
 async def test_dry_run_false_preserves_existing_write_path() -> None:
+    _sec_rd, _have = _gap_of(2)
     pool = _mock_pool(
         universe_rows=_ticker_universe_rows([("AAA", "1111")]),
-        per_ticker_existing_periods={
-            "AAA": _existing_periods_with_gap(date(2023, 3, 31), date(2024, 3, 31)),
-        },
+        sec_report_dates={"AAA": _sec_rd},
+        fundamentals_have={"AAA": _have},
     )
     fake_sec = _FakeSEC(
         facts_by_cik={"1111": {"facts": {}}},
@@ -426,16 +478,11 @@ async def test_ticker_subset_is_required_or_bounded() -> None:
         universe_rows=_ticker_universe_rows(
             [("AAA", "1111"), ("BBB", "2222"), ("CCC", "3333")]
         ),
-        per_ticker_existing_periods={
-            # Empty list → "fewer than 2 periods" → missing=[] →
-            # nothing_to_fill. We just need to count which tickers
-            # the handler ATTEMPTS to probe — they all land in
-            # ``nothing_to_fill`` when missing is empty, which is fine
-            # for the filter assertion below.
-            "AAA": [],
-            "BBB": [],
-            "CCC": [],
-        },
+        # No SEC reportDates configured → anchored=False → missing=[] →
+        # nothing_to_fill. We just need to count which tickers the handler
+        # ATTEMPTS to probe (CCC must be filtered out before any probe).
+        sec_report_dates={},
+        fundamentals_have={},
     )
     seen_ciks: list[str] = []
 
@@ -484,9 +531,9 @@ def test_no_validator_threshold_change_source_sentinel() -> None:
     sha = hashlib.sha256(
         fqc._FILING_DATES_SQL.encode("utf-8"),
     ).hexdigest()
-    # Matches the P0 pinned hash — same SQL, same byte-frozen contract.
+    # Matches the P3 pinned hash — same SQL, same byte-frozen contract.
     assert sha == (
-        "15ead84d3ecb6416c4bbb952f11d1a4329c560f9aef8269dd1c39234e195e49c"
+        "3517b01ca565d3383d8586fcac881808426dbd77298bad322efc27482a3ac380"
     ), (
         "fundamentals_quarterly_completeness._FILING_DATES_SQL drifted "
         "during the dry_run patch. The dry_run patch MUST NOT change "
@@ -511,13 +558,11 @@ async def test_dry_run_true_does_not_upsert_evidence() -> None:
     dry-run. Pinned via the planned-rows counter on the dry-run
     return dict (>0 because the handler accumulates) AND via the
     absence of any conn.executemany on the evidence table."""
+    _sec_rd, _have = _gap_of(2)
     pool = _mock_pool(
         universe_rows=_ticker_universe_rows([("AAA", "1111")]),
-        per_ticker_existing_periods={
-            "AAA": _existing_periods_with_gap(
-                date(2023, 3, 31), date(2024, 3, 31),
-            ),
-        },
+        sec_report_dates={"AAA": _sec_rd},
+        fundamentals_have={"AAA": _have},
     )
     fake_sec = _FakeSEC(
         facts_by_cik={"1111": {"facts": {}}},
@@ -547,13 +592,11 @@ async def test_dry_run_false_calls_evidence_upsert() -> None:
     """In live mode the handler MUST call the
     ``_upsert_fundamentals_period_source_evidence`` helper (which
     executes the UPSERT via ``conn.executemany``)."""
+    _sec_rd, _have = _gap_of(2)
     pool = _mock_pool(
         universe_rows=_ticker_universe_rows([("AAA", "1111")]),
-        per_ticker_existing_periods={
-            "AAA": _existing_periods_with_gap(
-                date(2023, 3, 31), date(2024, 3, 31),
-            ),
-        },
+        sec_report_dates={"AAA": _sec_rd},
+        fundamentals_have={"AAA": _have},
     )
     fake_sec = _FakeSEC(
         facts_by_cik={"1111": {"facts": {}}},
@@ -644,19 +687,16 @@ async def test_dry_run_false_calls_evidence_upsert() -> None:
 async def test_evidence_rows_planned_counter_in_dry_run() -> None:
     """The dry-run dict surfaces ``evidence_rows_planned`` so the
     operator can preview how many UPSERTs the live mode would do."""
+    _sec_rd, _have = _gap_of(3)
     pool = _mock_pool(
         universe_rows=_ticker_universe_rows([("AAA", "1111")]),
-        per_ticker_existing_periods={
-            "AAA": _existing_periods_with_gap(
-                date(2022, 3, 31), date(2024, 3, 31),
-            ),
-        },
+        sec_report_dates={"AAA": _sec_rd},
+        fundamentals_have={"AAA": _have},
     )
     fake_sec = _FakeSEC(
         facts_by_cik={"1111": {"facts": {}}},
-        # 3 yielded then None for the rest — handler will record both
-        # `yielded` and `extract_none` outcomes (one row per missing
-        # period regardless).
+        # 3 missing periods → 3 yielded extractions → handler records one
+        # evidence row per requested missing period.
         extractions=[_full_extraction(), _full_extraction(),
                      _full_extraction()] + [None] * 8,
     )

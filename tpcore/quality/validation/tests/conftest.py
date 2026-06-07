@@ -215,32 +215,61 @@ class FakePool:
                 {"indicator": name, "latest_date": today, "rows_total": 100}
                 for name in _MACRO_INDICATOR_NAMES
             ]
-        # fundamentals_quarterly_completeness: synthesize a clean
-        # quarterly cadence for one T1 stock so e2e tests for unrelated
-        # checks aren't false-failed by an empty universe sentinel or
-        # by a gap. Routes on the distinctive CTE+JOIN shape of the
-        # completeness check (the integrity check uses different SQL —
-        # no liquid-universe CTE, no JOIN).
-        # P1 (2026-05-30): the cadence-routed check requires
-        # ``sec_document_type_primary`` in the row payload so it can
-        # route to the quarterly cadence; without it the rows fall
-        # into the METADATA_REQUIRED bucket and the structural
-        # sentinel fires (which would false-fail unrelated e2e tests).
+        # fundamentals_quarterly_completeness (P3, 2026-06-07): the check
+        # now computes the gap as an AUTHORITATIVE set-difference of SEC
+        # reportDates (``platform.sec_periodic_filings``) vs fundamentals
+        # via the shared store. Synthesize one clean anchored 10-Q stock
+        # (SEC filed N reportDates; fundamentals has them all) so e2e
+        # tests for UNRELATED checks aren't false-failed by an empty
+        # universe sentinel, a metadata-coverage sentinel, or a gap.
+        from datetime import UTC, datetime, timedelta
+        _fqc_today = datetime.now(UTC).date()
+        _fqc_dates = [
+            _fqc_today - timedelta(days=91 * (7 - i)) for i in range(8)
+        ]
+        # Universe SQL — anchored on ticker_classifications, carries
+        # classification_id + cik. Distinctive marker: liquid.classification_id.
         if (
             "platform.fundamentals_quarterly" in sql_lower
-            and "join liquid using (ticker)" in sql_lower
+            and "liquid.classification_id" in sql_lower
         ):
-            from datetime import UTC, datetime, timedelta
-            today = datetime.now(UTC).date()
             return [
                 {"ticker": "AAPL",
-                 "period_end_date": today - timedelta(days=91 * (7 - i)),
+                 "classification_id": "c-AAPL",
+                 "cik": "0000320193",
+                 "period_end_date": pe,
                  "sec_document_type_primary": "10-Q",
-                 # P2b (2026-05-31): lifecycle columns added to SELECT;
-                 # synthetic AAPL is 'active' so cadence routing fires.
                  "issuer_lifecycle_state": None,
                  "issuer_lifecycle_event_date": None}
-                for i in range(8)
+                for pe in _fqc_dates
+            ]
+        # Shared-store _ANCHORED_SQL — AAPL has SEC periodic rows.
+        if "select distinct classification_id" in sql_lower:
+            wanted = set(args[0]) if args else set()
+            return [
+                {"classification_id": "c-AAPL"}
+            ] if "c-AAPL" in wanted else []
+        # Shared-store _EXPECTED_SQL — AAPL's SEC reportDates.
+        if "from platform.sec_periodic_filings" in sql_lower:
+            wanted = set(args[0]) if args else set()
+            if "c-AAPL" not in wanted:
+                return []
+            return [
+                {"classification_id": "c-AAPL", "report_date": pe}
+                for pe in _fqc_dates
+            ]
+        # Shared-store _HAVE_SQL — AAPL's fundamentals periods (= expected
+        # → no gap → PASS).
+        if (
+            "from platform.fundamentals_quarterly" in sql_lower
+            and "classification_id = any" in sql_lower
+        ):
+            wanted = set(args[0]) if args else set()
+            if "c-AAPL" not in wanted:
+                return []
+            return [
+                {"classification_id": "c-AAPL", "period_end_date": pe}
+                for pe in _fqc_dates
             ]
         return []
 

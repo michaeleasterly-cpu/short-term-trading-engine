@@ -57,10 +57,61 @@ def _make_pool(
     fetch_calls: list[tuple[str, tuple[Any, ...]]] = []
     fetchval_calls: list[tuple[str, tuple[Any, ...]]] = []
 
+    # P3: the validator now computes the gap via the shared store
+    # (set-difference of SEC reportDates vs fundamentals). The
+    # ``filing_rows`` carry per-issuer SEC reportDates + classification_id;
+    # we derive the store's anchored / expected / have row sets from them.
+    by_cid: dict[str, dict[str, Any]] = {}
+    for fr in filing_rows:
+        cid = fr.get("classification_id")
+        if cid is None:
+            continue
+        rec = by_cid.setdefault(
+            cid,
+            {
+                "ticker": fr["ticker"],
+                "sec": set(),
+                "have": set(),
+            },
+        )
+        if fr.get("period_end_date") is not None:
+            rec["have"].add(fr["period_end_date"])
+        for rd in fr.get("_sec_report_dates", ()):
+            rec["sec"].add(rd)
+
     async def _fetch(sql: str, *args: Any) -> list[dict[str, Any]]:
         fetch_calls.append((sql, args))
-        if "FROM platform.liquidity_tiers lt" in sql:
+        # Validator universe SQL.
+        if "WITH liquid AS" in sql:
             return filing_rows
+        # Store _ANCHORED_SQL.
+        if "SELECT DISTINCT classification_id" in sql:
+            wanted = set(args[0])
+            return [
+                {"classification_id": cid}
+                for cid in wanted
+                if by_cid.get(cid, {}).get("sec")
+            ]
+        # Store _EXPECTED_SQL.
+        if "FROM platform.sec_periodic_filings" in sql:
+            wanted = set(args[0])
+            out: list[dict[str, Any]] = []
+            for cid in wanted:
+                for rd in by_cid.get(cid, {}).get("sec", ()):
+                    out.append({"classification_id": cid, "report_date": rd})
+            return out
+        # Store _HAVE_SQL (by classification_id).
+        if ("FROM platform.fundamentals_quarterly" in sql
+                and "classification_id = ANY" in sql):
+            wanted = set(args[0])
+            out = []
+            for cid in wanted:
+                for pe in by_cid.get(cid, {}).get("have", ()):
+                    out.append(
+                        {"classification_id": cid, "period_end_date": pe}
+                    )
+            return out
+        # Per-ticker fundamentals read (the populator's own period probe).
         if "FROM platform.fundamentals_quarterly" in sql and "ANY($2::date[])" in sql:
             t = args[0]
             return [{"period_end_date": pe} for pe in fq_by_t.get(t, [])]
@@ -96,24 +147,31 @@ def _make_pool(
 
 
 def _two_quarterly_filings(ticker: str, today: date) -> list[dict]:
-    """Two anchor filings with a >100-day gap so the validator
-    surfaces inferred missing periods between them."""
-    return [
-        {
+    """P3 set-difference shape: SEC filed THREE quarterly reportDates;
+    fundamentals has only two (the middle one is missing) → the validator
+    surfaces exactly one genuine missing reportDate for this issuer.
+
+    The universe-row ``period_end_date`` values define the fundamentals
+    ``have`` set (one row per present period); ``_sec_report_dates`` (a
+    fixture-only key the fake reads) defines the SEC ``expected`` set."""
+    present_a = today - timedelta(days=400)
+    present_b = today - timedelta(days=10)
+    missing = today - timedelta(days=200)  # SEC filed it; fundamentals lacks
+    sec_dates = [present_a, missing, present_b]
+    cid = f"c-{ticker}"
+    rows = []
+    for pe in (present_a, present_b):
+        rows.append({
             "ticker": ticker,
-            "period_end_date": today - timedelta(days=400),
+            "classification_id": cid,
+            "cik": "0001",
+            "period_end_date": pe,
             "sec_document_type_primary": "10-Q",
             "issuer_lifecycle_state": None,
             "issuer_lifecycle_event_date": None,
-        },
-        {
-            "ticker": ticker,
-            "period_end_date": today - timedelta(days=10),
-            "sec_document_type_primary": "10-Q",
-            "issuer_lifecycle_state": None,
-            "issuer_lifecycle_event_date": None,
-        },
-    ]
+            "_sec_report_dates": sec_dates,
+        })
+    return rows
 
 
 # ──────────────────────────────────────────────────────────────────────

@@ -286,6 +286,31 @@ follow-up the per-ticker call count is small (one HTTP call per CIK
 returns ALL XBRL facts) so bulk is overkill. Revisit if scope widens."""
 
 
+def _cadence_for_primary(primary_form: str | None) -> str | None:
+    """Map an issuer's ``sec_document_type_primary`` to its filing cadence
+    ("quarterly" | "annual"), or None if the form is not routable.
+
+    Routes on the BASE form (``/A`` amendments collapse to base) using the
+    shared store's routed-form SoT — the SAME mapping the
+    fundamentals-completeness CHECK uses, so detector + healer cover the
+    identical set (closes the spac/fund routing gap).
+    """
+    from tpcore.quality.sec_periodic_filings_store import (
+        ROUTED_ANNUAL_FORMS,
+        ROUTED_QUARTERLY_FORMS,
+        base_form,
+    )
+
+    if primary_form is None:
+        return None
+    base = base_form(primary_form)
+    if base in {base_form(f) for f in ROUTED_QUARTERLY_FORMS}:
+        return "quarterly"
+    if base in {base_form(f) for f in ROUTED_ANNUAL_FORMS}:
+        return "annual"
+    return None
+
+
 async def handle_sec_fundamentals_fallback(
     pool: asyncpg.Pool, config: dict[str, Any]
 ) -> int | dict[str, Any] | None:
@@ -334,6 +359,7 @@ async def handle_sec_fundamentals_fallback(
     from tpcore.fundamentals.cache import FundamentalsCache
     from tpcore.ingestion.archive_etl import manifest_lifecycle, read_archive_csv
     from tpcore.outage import DataProviderOutage
+    from tpcore.quality.sec_periodic_filings_store import compute_filing_gap
     from tpcore.sec.companyfacts_adapter import SECCompanyFactsAdapter
 
     today = datetime.now(UTC).date()
@@ -349,63 +375,76 @@ async def handle_sec_fundamentals_fallback(
         if ticker_filter else None
     )
 
+    # Universe mirrors the fundamentals-completeness CHECK's routing
+    # (P3, 2026-06-07): route on ``sec_document_type_primary`` (base
+    # form) rather than ``asset_class = 'stock'`` so detector + healer
+    # cover the SAME set. This widens to annual filers (20-F / 40-F /
+    # 10-K) and EXCLUDES non-routed forms (spac/fund N-1A etc.) the old
+    # ``asset_class='stock'`` predicate swept in — the net routed target
+    # is similar/smaller, and crucially identical to the check.
+    #
+    # We carry ``classification_id`` (= ``tc.id``) so the gap is computed
+    # by the SAME shared store helper the check uses
+    # (``compute_filing_gaps``), against the authoritative
+    # ``platform.sec_periodic_filings`` reportDate substrate — no second
+    # month-stepping copy of the gap math.
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT DISTINCT tc.ticker, tc.cik
+            SELECT DISTINCT ON (tc.ticker)
+                   tc.ticker, tc.cik, tc.id AS classification_id,
+                   tc.sec_document_type_primary
             FROM platform.ticker_classifications tc
             JOIN platform.liquidity_tiers lt ON lt.ticker = tc.ticker
-            WHERE tc.asset_class = 'stock'
-              AND (tc.lifetime_end IS NULL OR tc.lifetime_end > CURRENT_DATE)
+            WHERE (tc.lifetime_end IS NULL OR tc.lifetime_end > CURRENT_DATE)
               AND lt.tier <= 2
               AND tc.cik IS NOT NULL AND tc.cik <> ''
-            ORDER BY tc.ticker
+              AND tc.sec_document_type_primary IS NOT NULL
+            ORDER BY tc.ticker, tc.lifetime_start DESC NULLS LAST
             """
         )
-    candidates = [(r["ticker"], r["cik"]) for r in rows]
+    # Route each candidate to a cadence via the SAME base-form mapping the
+    # check uses (store routed-form SoT). Only routable forms (10-Q ⇒
+    # quarterly; 10-K/20-F/40-F ⇒ annual) survive; any other primary form
+    # is dropped (the check excludes them too — OTHER_FORM bucket).
+    cadence_by_ticker: dict[str, str] = {}
+    cid_by_ticker: dict[str, str] = {}
+    candidates = []
+    for r in rows:
+        cadence = _cadence_for_primary(r["sec_document_type_primary"])
+        if cadence is None:
+            continue
+        candidates.append((r["ticker"], r["cik"]))
+        cadence_by_ticker[r["ticker"]] = cadence
+        cid_by_ticker[r["ticker"]] = r["classification_id"]
     if ticker_filter_list:
         wanted = set(ticker_filter_list)
         candidates = [(t, c) for t, c in candidates if t in wanted]
     logger.info(
         "ingestion.handler.sec_fundamentals_fallback.universe",
-        tier2_with_cik=len(candidates),
+        tier2_routed_with_cik=len(candidates),
         ticker_filter=len(ticker_filter_list or []),
     )
 
-    import calendar as _cal
-
     async def _missing_periods_for(t: str) -> list[_date_t]:
-        async with pool.acquire() as cx:
-            r = await cx.fetch(
-                "SELECT period_end_date FROM platform.fundamentals_quarterly "
-                "WHERE ticker = $1 ORDER BY period_end_date",
-                t,
-            )
-        have = sorted({row["period_end_date"] for row in r})
-        if len(have) < 2:
+        """Authoritative SEC-reportDate set-difference for one ticker,
+        via the SAME shared store helper the completeness check uses.
+
+        Returns the SEC-filed reportDates (at the ticker's cadence) that
+        are ABSENT from ``fundamentals_quarterly`` — exactly the periods
+        worth re-pulling. An ``anchored=False`` issuer (no SEC periodic
+        substrate yet) returns ``[]`` here: there is nothing authoritative
+        to backfill against, so the healer does not fabricate targets
+        (the check routes that issuer to METADATA_REQUIRED, not a gap)."""
+        cid = cid_by_ticker.get(t)
+        cadence = cadence_by_ticker.get(t)
+        if cid is None or cadence is None:
             return []
-        out: list[_date_t] = []
-        for i in range(1, len(have)):
-            a, b = have[i - 1], have[i]
-            if (b - a).days <= 100:
-                continue
-            cur_y, cur_m = a.year, a.month
-            for _ in range(40):  # safety bound
-                next_m = cur_m + 3
-                next_y = cur_y + (next_m - 1) // 12
-                next_m = ((next_m - 1) % 12) + 1
-                # Calendar-correct last-day-of-month (was a buggy fixed
-                # dict {3,6,9,12}: 31/30/30/31 with 30 fallback — crashed
-                # on Feb fiscal-year-end filers with "day is out of range
-                # for month" on date(y, 2, 30)). Handles leap years too.
-                last_day = _cal.monthrange(next_y, next_m)[1]
-                candidate = _date_t(next_y, next_m, last_day)
-                if candidate >= b:
-                    break
-                if candidate > a:
-                    out.append(candidate)
-                cur_y, cur_m = candidate.year, candidate.month
-        return out
+        async with pool.acquire() as cx:
+            result = await compute_filing_gap(cx, cid, cadence)
+        if not result.anchored:
+            return []
+        return list(result.missing_periods)
 
     archive_rows: list[dict] = []
     no_data: list[tuple[str, str]] = []

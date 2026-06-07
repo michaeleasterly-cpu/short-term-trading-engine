@@ -29,6 +29,7 @@ Coverage matrix:
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -46,9 +47,82 @@ def _today() -> date:
     return datetime.now(UTC).date()
 
 
-def _mock_pool(rows: list[dict]) -> MagicMock:
+def _mock_pool(
+    rows: list[dict],
+    *,
+    sec_extra: dict[str, list[date]] | None = None,
+    have_override: dict[str, list[date]] | None = None,
+    evidenced: dict[str, list[date]] | None = None,
+) -> MagicMock:
+    """Substrate-aware pool (P3 set-difference gate).
+
+    The universe ``rows`` carry per-issuer classification_id + the present
+    fundamentals period_end_dates. By default an issuer's SEC reportDates
+    (``expected``) equal its present fundamentals periods (``have``) → no
+    gap. ``sec_extra[ticker]`` adds reportDates the fundamentals lacks →
+    a genuine set-difference gap for that issuer. ``have_override`` lets a
+    test set a sparser fundamentals set. ``evidenced`` returns
+    dual-source-confirmed-empty periods from the evidence join.
+    """
+    sec_extra = sec_extra or {}
+    have_override = have_override or {}
+    evidenced = evidenced or {}
+
+    # Group universe rows by ticker → cid + present periods.
+    by_ticker: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        t = r["ticker"]
+        rec = by_ticker.setdefault(
+            t, {"cid": r["classification_id"], "periods": set()},
+        )
+        if r.get("period_end_date") is not None:
+            rec["periods"].add(r["period_end_date"])
+    cid_to_ticker = {v["cid"]: k for k, v in by_ticker.items()}
+
+    def _sec_for(t: str) -> set[date]:
+        return set(by_ticker[t]["periods"]) | set(sec_extra.get(t, []))
+
+    def _have_for(t: str) -> set[date]:
+        if t in have_override:
+            return set(have_override[t])
+        return set(by_ticker[t]["periods"])
+
+    async def _fetch(sql: str, *args: Any) -> list[dict[str, Any]]:
+        if "WITH liquid AS" in sql:
+            return rows
+        if "SELECT DISTINCT classification_id" in sql:
+            wanted = set(args[0])
+            return [
+                {"classification_id": cid}
+                for cid in wanted
+                if _sec_for(cid_to_ticker[cid])
+            ]
+        if "FROM platform.sec_periodic_filings" in sql:
+            wanted = set(args[0])
+            out: list[dict[str, Any]] = []
+            for cid in wanted:
+                for rd in _sec_for(cid_to_ticker[cid]):
+                    out.append({"classification_id": cid, "report_date": rd})
+            return out
+        if ("FROM platform.fundamentals_quarterly" in sql
+                and "classification_id = ANY" in sql):
+            wanted = set(args[0])
+            out = []
+            for cid in wanted:
+                for pe in _have_for(cid_to_ticker[cid]):
+                    out.append(
+                        {"classification_id": cid, "period_end_date": pe}
+                    )
+            return out
+        if "confirmed_data_gap_evidence" in sql:
+            ticker = args[0]
+            return [
+                {"period_end_date": d} for d in evidenced.get(ticker, [])
+            ]
+        return []
+
     conn = MagicMock()
-    conn.fetch = AsyncMock(return_value=rows)
+    conn.fetch = AsyncMock(side_effect=_fetch)
     acquire = MagicMock()
     acquire.__aenter__ = AsyncMock(return_value=conn)
     acquire.__aexit__ = AsyncMock(return_value=None)
@@ -66,6 +140,8 @@ def _row(
 ) -> dict:
     return {
         "ticker": ticker,
+        "classification_id": f"c-{ticker}",
+        "cik": "0001",
         "period_end_date": period_end,
         "sec_document_type_primary": primary,
         "issuer_lifecycle_state": lifecycle_state,
@@ -142,7 +218,6 @@ async def test_p2b_c_active_state_does_NOT_route_to_terminated() -> None:
     fires normally (P1 behavior preserved)."""
     today = _today()
     rows = [
-        # 250-day gap → quarterly miss.
         _row("LIVE", today - timedelta(days=400), "10-Q",
              lifecycle_state="active"),
         _row("LIVE", today - timedelta(days=150), "10-Q",
@@ -150,10 +225,11 @@ async def test_p2b_c_active_state_does_NOT_route_to_terminated() -> None:
         _row("LIVE", today - timedelta(days=30), "10-Q",
              lifecycle_state="active"),
     ]
-    pool = _mock_pool(rows)
+    # SEC filed a reportDate (today-250) fundamentals lacks → genuine gap.
+    pool = _mock_pool(rows, sec_extra={"LIVE": [today - timedelta(days=250)]})
     ev = await _evaluate(pool)
     assert ev.excluded_lifecycle_terminated == 0
-    assert "LIVE" in ev.gaps  # cadence-FAIL — P1 behavior intact
+    assert "LIVE" in ev.gaps  # cadence-FAIL — set-difference gap intact
 
 
 # ─── D. NULL state + gap → cadence FAIL (P1 unchanged) ───────────────
@@ -172,7 +248,7 @@ async def test_p2b_d_null_state_falls_through_to_cadence_routing() -> None:
         _row("UNK", today - timedelta(days=30), "10-Q",
              lifecycle_state=None),
     ]
-    pool = _mock_pool(rows)
+    pool = _mock_pool(rows, sec_extra={"UNK": [today - timedelta(days=250)]})
     ev = await _evaluate(pool)
     assert ev.excluded_lifecycle_terminated == 0
     assert "UNK" in ev.gaps
@@ -259,7 +335,10 @@ async def test_p2b_g_repair_targets_exclude_terminated() -> None:
         # Fillers.
         *(_row(f"R{i}", today - timedelta(days=60), "10-Q") for i in range(5)),
     ]
-    pool = _mock_pool(rows)
+    # LIVE_FAIL has a SEC-filed reportDate fundamentals lacks → real gap.
+    pool = _mock_pool(
+        rows, sec_extra={"LIVE_FAIL": [today - timedelta(days=250)]},
+    )
     targets, lookback = await compute_fundamentals_repair_targets(pool)
     assert "LIVE_FAIL" in targets
     assert "DEREG_GAP" not in targets

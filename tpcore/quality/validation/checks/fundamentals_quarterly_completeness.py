@@ -1,29 +1,57 @@
-"""fundamentals_quarterly completeness — cadence-routed periodic-filing invariant.
+"""fundamentals_quarterly completeness — authoritative SEC reportDate gate.
 
-**P1 rewrite (2026-05-30)** — routing by ``ticker_classifications.sec_document_type_primary``
-replaces the prior ``asset_class = 'stock'`` predicate. The old quarterly-cadence
-gate fired false positives on every foreign private issuer (20-F / 40-F filers)
-that files annually rather than quarterly. Today's 173-ticker failing set is
-~40% 20-F filers (AER, ARCO, ARQQ, AU, BIP, BIPC, BWMX, CAMT, …) that this
-rewrite correctly reclassifies as PASS at annual cadence.
+**P3 rewrite (2026-06-07)** — the gap is now an **authoritative
+set-difference** against the SEC periodic-filings substrate
+(``platform.sec_periodic_filings``), NOT an even-spacing interpolation
+heuristic. The shared store ``tpcore.quality.sec_periodic_filings_store``
+is the SINGLE source of the routed-form SoT + the gap computation; the
+check and the SEC-fundamentals healer both delegate to it, so
+detector/healer parity is REAL (one helper, not two month-stepping
+copies that could drift).
 
-The dispositive routing signal is the SEC-derived ``sec_document_type_primary``
-column populated by the P0 ``backfill_sec_metadata`` stage (commit 2eca8c7):
+  expected ⇐ DISTINCT ``report_date`` SEC actually filed for the issuer
+             (filtered to the cadence's routed forms — 10-Q for
+             quarterly; 10-K/20-F/40-F for annual; ``/A`` amendments
+             collapse to base and are set-difference neutral).
+  have     ⇐ DISTINCT ``period_end_date`` present in
+             ``fundamentals_quarterly`` for the issuer.
+  missing  ⇐ ``sorted(expected - have)`` — the GENUINE gap; every named
+             date is a reportDate the SEC filed but our fundamentals
+             substrate lacks. No interpolation, no inference: a 53-week
+             fiscal year, a 10-K-replaces-Q4 annual filer, and a
+             restatement amendment all fall out correctly because we only
+             ever demand the reportDates SEC literally filed.
 
-  ============= ========================== =================
-  Primary form  Cadence                    Max consecutive
-                                           filing-gap days
-  ============= ========================== =================
-  10-Q          quarterly                  100  (= 92 + 8 slack)
-  10-K          annual                     450
-  20-F          annual                     450
-  40-F          annual                     450
-  ============= ========================== =================
+The dispositive ROUTING signal is still the SEC-derived
+``sec_document_type_primary`` column (P0 ``backfill_sec_metadata`` stage):
+base-form 10-Q ⇒ quarterly cadence; 10-K / 20-F / 40-F ⇒ annual cadence.
+The routed-form sets themselves are imported from the shared store
+(``ROUTED_QUARTERLY_FORMS`` / ``ROUTED_ANNUAL_FORMS`` via ``base_form``)
+— this module does NOT keep a second copy.
 
-The 450-day annual cap is calibrated for foreign-private-issuer 20-F
-deadlines (4 months after fiscal year end) and short-late filers: a
-true year-skip is ~730 days (two FY ends), so 450 leaves ~85 days of
-late-filing slack without false-firing on a legitimately-late filer.
+# Anchored: the false-green discriminator (the core safety property)
+
+``FilingGapResult.anchored`` (from the shared store) is dispositive:
+
+  * ``anchored=True, missing_periods=()``  ⇒ SEC evidence exists and
+    fundamentals has every filed reportDate ⇒ ticker PASSES.
+  * ``anchored=True, missing_periods=[…]`` ⇒ SEC says these reportDates
+    should exist but fundamentals lacks them ⇒ ticker FAILS, the missing
+    reportDates are NAMED (after the dual-source evidence-join routes any
+    confirmed-empty periods to ``excluded_confirmed_data_gap``).
+  * ``anchored=False`` (ZERO ``sec_periodic_filings`` rows for the issuer)
+    ⇒ there is NO SEC periodic evidence we can verify against, so the
+    issuer MUST NOT silently PASS:
+      - **CIK-less** tier≤2 names (no SEC obligation we can verify) route
+        to ``excluded_confirmed_data_gap`` (excluded-WITH-evidence), NOT
+        PASS and NOT a fabricated gap.
+      - **CIK-backed** issuers that are ``anchored=False`` mean the
+        periodic-filings backfill hasn't populated them yet — that must
+        SURFACE as ``excluded_metadata_required`` (and feed the
+        metadata-coverage sentinel below), NEVER a silent pass.
+
+Collapsing ``anchored=False`` into a PASS would re-introduce the exact
+false-green this substrate exists to prevent.
 
 # Five-state semantics
 
@@ -34,17 +62,19 @@ Each ticker is in exactly one state per evaluation:
                           denominator; contributes nothing to ``failures``.
   FAIL                  — cadence gap detected; ``FailureDetail(reason=
                           "missing_period_<form>", …)``.
-  METADATA_REQUIRED     — ``sec_document_type_primary IS NULL``; CANNOT be routed.
+  METADATA_REQUIRED     — ``sec_document_type_primary IS NULL`` (cannot route)
+                          OR a CIK-backed issuer that is ``anchored=False`` (the
+                          periodic-filings backfill has not populated it yet).
                           Excluded from denominator; counted in
                           ``excluded_metadata_required``. NEVER counts as a
                           per-ticker FAIL — the operator-actionable signal lives
                           at the suite level via a metadata-coverage sentinel
                           (see below).
-  CONFIRMED_DATA_GAP    — ticker has < 2 filings in active range AND is past the
-                          new-listing grace window (issuer-age-aware threshold,
-                          see ``_NEW_LISTING_GRACE_DAYS``). Excluded from
-                          denominator; counted in ``excluded_confirmed_data_gap``.
-                          NOT a defect.
+  CONFIRMED_DATA_GAP    — a CIK-LESS issuer that is ``anchored=False`` (no SEC
+                          periodic obligation we can verify) OR a period the
+                          dual-source evidence-join confirms empty. Excluded
+                          from denominator; counted in
+                          ``excluded_confirmed_data_gap``. NOT a defect.
   BLOCKED_VENDOR_ACCESS — reserved for P2 (vendor-error surface; not detectable
                           from this DB-only check).
 
@@ -72,12 +102,21 @@ Liveness is now per-cadence:
   ``LIVE_WITHIN_DAYS_ANNUAL    = 540``  (18 months — covers worst-case
                                            missed-by-one-year before darkening)
 
-# Detector / healer parity
+# Detector / healer parity (now REAL — a single shared helper)
 
-``compute_fundamentals_repair_targets`` continues to share ``_evaluate`` with
-the check (existing invariant). The healer ONLY targets tickers in the
-``gaps`` set — never METADATA_REQUIRED / CONFIRMED_DATA_GAP / synthetic
-``<metadata_coverage>`` tickers (those aren't fundamentals-refresh-fixable).
+``compute_fundamentals_repair_targets`` + ``compute_fundamentals_gap_periods``
+share ``_evaluate`` with the check (existing invariant), AND ``_evaluate``
+itself now delegates the gap math to
+``tpcore.quality.sec_periodic_filings_store.compute_filing_gaps``. The
+SEC-fundamentals healer (``tpcore.ingestion.handlers
+.handle_sec_fundamentals_fallback``) delegates to the SAME store helper
+(``compute_filing_gap``). There is no longer a second month-stepping copy
+of the gap math anywhere: detector and healer cannot disagree because
+they compute the gap with one function over one substrate.
+
+The healer ONLY targets tickers in the ``gaps`` set — never
+METADATA_REQUIRED / CONFIRMED_DATA_GAP / synthetic ``<metadata_coverage>``
+tickers (those aren't fundamentals-refresh-fixable).
 
 # CheckResult shape preserved
 
@@ -92,13 +131,23 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
 import structlog
 
 from tpcore.quality.confirmed_data_gap_store import (
     EVIDENCE_JOIN_SQL as _CONFIRMED_DATA_GAP_EVIDENCE_JOIN_SQL,
+)
+from tpcore.quality.sec_periodic_filings_store import (
+    ROUTED_ANNUAL_FORMS as _STORE_ROUTED_ANNUAL_FORMS,
+)
+from tpcore.quality.sec_periodic_filings_store import (
+    ROUTED_QUARTERLY_FORMS as _STORE_ROUTED_QUARTERLY_FORMS,
+)
+from tpcore.quality.sec_periodic_filings_store import (
+    base_form,
+    compute_filing_gaps,
 )
 from tpcore.quality.validation.models import CheckResult, FailureDetail
 
@@ -116,26 +165,38 @@ CHECK_NAME = "fundamentals_quarterly_completeness"
 # foreign country) are now correctly judged by their actual cadence.
 TRADEABLE_TIER_MAX = 2
 
-# Cadence forms. The check ROUTES on these; any other form value falls
-# into the OTHER_FORM exclusion bucket (e.g. ``N-1A`` for closed-end
-# funds — not a periodic operating-company filing).
+# Cadence forms. The check ROUTES on these (base-form of the issuer's
+# ``sec_document_type_primary``); any other form value falls into the
+# OTHER_FORM exclusion bucket (e.g. ``N-1A`` for closed-end funds — not
+# a periodic operating-company filing).
 #
-# Note: amendment variants (``10-Q/A``, ``10-K/A``, ``20-F/A``, ``40-F/A``)
-# are NOT listed here by design — the P0 ``extract_filing_metadata``
-# primitive collapses ``/A`` amendments to their base form for primary
-# classification (see ``tpcore/sec/companyfacts_adapter.py`` lines
-# 351-357). So a 10-Q/A-only filer's primary form lands as ``10-Q``;
-# this routing set is correct.
-_QUARTERLY_FORMS: frozenset[str] = frozenset({"10-Q"})
-_ANNUAL_FORMS: frozenset[str] = frozenset({"10-K", "20-F", "40-F"})
+# These are DERIVED from the shared store's routed-form SoT
+# (``ROUTED_QUARTERLY_FORMS`` / ``ROUTED_ANNUAL_FORMS``, /A collapsed via
+# ``base_form``) so the CHECK constraint, the validator routing, and the
+# store's expected-period filter can never drift. The parity test
+# ``tpcore/quality/tests/test_sec_periodic_filings_store.py
+# ::test_routed_forms_equal_validator_routing`` asserts the equality.
+#
+# Note: amendment variants (``10-Q/A``, ``10-K/A``, …) collapse to base
+# here — the P0 ``extract_filing_metadata`` primitive collapses ``/A``
+# amendments to their base form for primary classification, so a
+# 10-Q/A-only filer's primary form lands as ``10-Q``; this routing set
+# is correct.
+_QUARTERLY_FORMS: frozenset[str] = frozenset(
+    base_form(f) for f in _STORE_ROUTED_QUARTERLY_FORMS
+)
+_ANNUAL_FORMS: frozenset[str] = frozenset(
+    base_form(f) for f in _STORE_ROUTED_ANNUAL_FORMS
+)
 _ROUTED_FORMS: frozenset[str] = _QUARTERLY_FORMS | _ANNUAL_FORMS
 
-# Quarterly cadence — Q4 is 92 days + 8-day late-filing slack.
+# Quarterly cadence — Q4 is 92 days + 8-day late-filing slack. Retained
+# only for the per-cadence liveness gate + reporting (the gap math is now
+# the authoritative SEC reportDate set-difference, NOT a day-gap cap).
 MAX_QUARTERLY_GAP_DAYS = 100
 
 # Annual cadence — 365 + 4-month 20-F deadline + ~30-day late-filing
-# slack. A true year-skip is ~730 days (two consecutive FY ends);
-# 450 leaves headroom without false-firing legitimately-late 20-F.
+# slack. Retained only for liveness/reporting (see MAX_QUARTERLY_GAP_DAYS).
 MAX_ANNUAL_GAP_DAYS = 450
 
 # Per-cadence liveness gates. The pre-P1 single 120-day window silently
@@ -144,11 +205,12 @@ MAX_ANNUAL_GAP_DAYS = 450
 LIVE_WITHIN_DAYS_QUARTERLY = 120
 LIVE_WITHIN_DAYS_ANNUAL = 540
 
-# CONFIRMED_DATA_GAP threshold: a ticker with < 2 filings is either
-# a brand-new listing (PASS — grace window) or a true data hole. The
-# discriminator is issuer-age vs cadence window.
-_NEW_LISTING_GRACE_QUARTERLY_DAYS = MAX_QUARTERLY_GAP_DAYS * 2  # ~200d
-_NEW_LISTING_GRACE_ANNUAL_DAYS = MAX_ANNUAL_GAP_DAYS  # ~450d
+# CONFIRMED_DATA_GAP routing (P3 set-difference rewrite): the new-listing
+# grace window is no longer needed — a brand-new listing is ``anchored=True``
+# (it HAS sec_periodic_filings rows) with no missing reportDates, so it
+# PASSES naturally. The CONFIRMED_DATA_GAP bucket now collects ``anchored=
+# False`` CIK-less issuers (no SEC obligation we can verify) + dual-source-
+# evidenced empty periods (the evidence-join path below).
 
 # Metadata-coverage structural sentinel — fires when routing fails on
 # too high a fraction of the active universe. 25% is the P1 floor; at
@@ -212,23 +274,45 @@ ARDT_WATCHLIST: frozenset[str] = frozenset({"ARDT"})
 _EVIDENCE_JOIN_SQL = _CONFIRMED_DATA_GAP_EVIDENCE_JOIN_SQL
 
 
+# Routed universe — tier≤2 issuers with their identity (classification_id
+# + CIK) and routing metadata. This is the DENOMINATOR universe: it is
+# anchored on ``ticker_classifications`` (NOT on ``fundamentals_quarterly``)
+# so an issuer with ZERO fundamentals rows still appears — that is the
+# ``anchored=False`` surface the set-difference gate must judge (a CIK-less
+# name → confirmed_data_gap; a CIK-backed name with no SEC substrate yet →
+# metadata_required). LEFT JOIN fundamentals so present period_end_dates
+# come along for the per-cadence liveness gate + reporting.
+#
+# ``tc.id`` is the canonical classification_id (text; FK target of
+# ``sec_periodic_filings.classification_id`` + ``fundamentals_quarterly
+# .classification_id``) — the shared store keys on it.
 _FILING_DATES_SQL = """
     WITH liquid AS (
-        SELECT lt.ticker, tc.sec_document_type_primary,
+        SELECT DISTINCT ON (tc.ticker)
+               tc.ticker,
+               tc.id AS classification_id,
+               tc.cik,
+               tc.sec_document_type_primary,
                tc.issuer_lifecycle_state,
                tc.issuer_lifecycle_event_date
         FROM platform.liquidity_tiers lt
         JOIN platform.ticker_classifications tc ON tc.ticker = lt.ticker
         WHERE lt.tier <= $1
+          AND (tc.lifetime_end IS NULL OR tc.lifetime_end > CURRENT_DATE)
+        ORDER BY tc.ticker, tc.lifetime_start DESC NULLS LAST
     )
-    SELECT fq.ticker, fq.period_end_date,
+    SELECT liquid.ticker,
+           liquid.classification_id,
+           liquid.cik,
            liquid.sec_document_type_primary,
            liquid.issuer_lifecycle_state,
-           liquid.issuer_lifecycle_event_date
-    FROM platform.fundamentals_quarterly fq
-    JOIN liquid USING (ticker)
-    WHERE fq.period_end_date IS NOT NULL
-    ORDER BY fq.ticker, fq.period_end_date
+           liquid.issuer_lifecycle_event_date,
+           fq.period_end_date
+    FROM liquid
+    LEFT JOIN platform.fundamentals_quarterly fq
+        ON fq.ticker = liquid.ticker
+       AND fq.period_end_date IS NOT NULL
+    ORDER BY liquid.ticker, fq.period_end_date
 """
 
 
@@ -259,53 +343,30 @@ class _Evaluation:
     # (sparse + evidenced) so existing readers see the right number.
     excluded_confirmed_data_gap_evidenced: int = 0
     by_form: dict[str, int] = field(default_factory=dict)
-    # ticker → (sorted list of inferred missing period_end_dates, form)
+    # ticker → (sorted list of SEC-filed reportDates absent from
+    # fundamentals_quarterly — the authoritative set-difference, form)
     gaps: dict[str, tuple[list[date], str]] = field(default_factory=dict)
     # Set when the metadata-coverage sentinel must additionally fire.
     metadata_coverage_low: bool = False
     metadata_coverage_ratio: float = 0.0
 
 
-def _infer_missing_period_ends(
-    earlier: date, later: date, *, max_gap_days: int, period_days: int,
-) -> list[date]:
-    """Given two consecutive present filings ~Nx periods apart, return
-    the inferred missing period-ends between them.
+def _cadence_for(primary_form: str | None) -> tuple[str, int, int] | None:
+    """Return (cadence_name, max_gap_days, live_within_days) for the
+    given primary form, or None if not routable.
 
-    Approximates by placing missing period-ends evenly between the two
-    anchors. The healer uses ONLY the earliest missing date (to set
-    ``lookback_days``); the check uses the count for logging. Exact
-    calendar-period-snapping isn't needed — gaps are the signal, the
-    inferred dates are advisory.
-
-    ``period_days`` is the per-cadence typical period length (92 for
-    quarterly, 365 for annual); used to estimate the count of missing
-    periods.
+    ``cadence_name`` ("quarterly"|"annual") is what the shared store's
+    ``compute_filing_gaps`` keys on. ``max_gap_days`` is retained for the
+    failure-message wording; ``live_within_days`` drives the per-cadence
+    liveness (dark) gate. The form is matched on its BASE form (``/A``
+    amendments collapse to base) so a primary that arrived as ``10-Q/A``
+    still routes quarterly.
     """
-    gap_days = (later - earlier).days
-    if gap_days <= max_gap_days:
-        return []
-    n_missing = max(1, round(gap_days / period_days) - 1)
-    out: list[date] = []
-    for i in range(1, n_missing + 1):
-        offset = int(round(gap_days * i / (n_missing + 1)))
-        out.append(earlier + timedelta(days=offset))
-    return out
-
-
-def _cadence_for(primary_form: str | None) -> tuple[str, int, int, int] | None:
-    """Return (cadence_name, max_gap_days, live_within_days, period_days)
-    for the given primary form, or None if not routable.
-
-    The 4th component (period_days) feeds the missing-period inference
-    heuristic — 92 for quarterly, 365 for annual.
-    """
-    if primary_form in _QUARTERLY_FORMS:
-        return ("quarterly", MAX_QUARTERLY_GAP_DAYS,
-                LIVE_WITHIN_DAYS_QUARTERLY, 92)
-    if primary_form in _ANNUAL_FORMS:
-        return ("annual", MAX_ANNUAL_GAP_DAYS,
-                LIVE_WITHIN_DAYS_ANNUAL, 365)
+    base = base_form(primary_form) if primary_form is not None else None
+    if base in _QUARTERLY_FORMS:
+        return ("quarterly", MAX_QUARTERLY_GAP_DAYS, LIVE_WITHIN_DAYS_QUARTERLY)
+    if base in _ANNUAL_FORMS:
+        return ("annual", MAX_ANNUAL_GAP_DAYS, LIVE_WITHIN_DAYS_ANNUAL)
     return None
 
 
@@ -331,13 +392,12 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
                 ticker=_UNIVERSE_SENTINEL_TICKER,
                 reason="empty_liquid_universe",
                 expected=(
-                    f"tier≤{TRADEABLE_TIER_MAX} ticker with fundamentals "
-                    f"filings to exist"
+                    f"tier≤{TRADEABLE_TIER_MAX} active issuer to resolve "
+                    f"from liquidity_tiers ⋈ ticker_classifications"
                 ),
                 observed=(
-                    "zero T1/T2 filings resolved — "
-                    "fundamentals_quarterly empty or liquidity_tiers/"
-                    "ticker_classifications stale"
+                    "zero active T1/T2 issuers resolved — "
+                    "liquidity_tiers / ticker_classifications empty or stale"
                 ),
             ),
             evaluated_routed=0, excluded_dark=0,
@@ -346,21 +406,29 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
             excluded_other_form=0,
         )
 
-    # Group filings by ticker; capture each ticker's primary form +
-    # lifecycle state (a ticker can appear in multiple rows but both
-    # are invariant per row since they come from the joined
-    # classification row).
+    # Group rows by ticker; capture each ticker's identity
+    # (classification_id, CIK) + routing metadata. Each ticker is one row
+    # in ``liquid`` (DISTINCT ON), LEFT JOINed to fundamentals — so a
+    # period_end_date of NULL means the issuer has ZERO fundamentals rows.
     per_ticker: dict[str, list[date]] = {}
+    cid_by_ticker: dict[str, str | None] = {}
+    cik_by_ticker: dict[str, str | None] = {}
     primary_by_ticker: dict[str, str | None] = {}
     lifecycle_by_ticker: dict[str, str | None] = {}
     for r in rows:
-        per_ticker.setdefault(r["ticker"], []).append(r["period_end_date"])
-        primary_by_ticker[r["ticker"]] = r["sec_document_type_primary"]
+        ticker = r["ticker"]
+        pe = r["period_end_date"]
+        bucket = per_ticker.setdefault(ticker, [])
+        if pe is not None:  # LEFT JOIN may yield a NULL placeholder row
+            bucket.append(pe)
+        cid_by_ticker[ticker] = r["classification_id"]
+        cik_by_ticker[ticker] = r.get("cik")
+        primary_by_ticker[ticker] = r["sec_document_type_primary"]
         # P2b: ``issuer_lifecycle_state`` is NULL until the lifecycle
         # backfill stage runs against this ticker. NULL → fall through
         # to the silence-based excluded_dark heuristic; a known terminal
         # state short-circuits BEFORE the cadence check.
-        lifecycle_by_ticker[r["ticker"]] = r.get("issuer_lifecycle_state")
+        lifecycle_by_ticker[ticker] = r.get("issuer_lifecycle_state")
 
     evaluated_routed = 0
     excluded_dark = 0
@@ -372,14 +440,17 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
     by_form: dict[str, int] = {}
     gaps: dict[str, tuple[list[date], str]] = {}
 
-    for ticker, period_ends in per_ticker.items():
-        if not period_ends:
-            continue
+    # ── Pass 1: bucket each ticker, collecting routed candidates ───────
+    # A routed candidate is a (ticker, classification_id, cadence_name,
+    # primary) that survives the lifecycle / metadata / other-form /
+    # liveness pre-filters; its gap is then computed authoritatively
+    # against ``platform.sec_periodic_filings`` by the shared store.
+    routed: list[tuple[str, str, str, str]] = []  # (ticker, cid, cadence, form)
+    cadence_by_cid: dict[str, str] = {}
 
+    for ticker, period_ends in per_ticker.items():
         # P2b: evidence-first routing. Form 25 / Form 15 evidence of
         # termination is dispositive — route BEFORE cadence/liveness.
-        # The silence-based excluded_dark heuristic only applies when
-        # we have NO lifecycle evidence (NULL state).
         lifecycle_state = lifecycle_by_ticker.get(ticker)
         if lifecycle_state in _TERMINAL_LIFECYCLE_STATES:
             excluded_lifecycle_terminated += 1
@@ -388,84 +459,93 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
         primary = primary_by_ticker.get(ticker)
         cadence = _cadence_for(primary)
         if cadence is None:
-            # Two sub-cases: NULL primary form → METADATA_REQUIRED.
-            # Any other non-routed form (e.g. ``N-1A`` for closed-end
-            # funds) → OTHER_FORM. Both EXCLUDED from the denominator.
+            # NULL primary form → METADATA_REQUIRED; any other non-routed
+            # form (e.g. ``N-1A`` for closed-end funds) → OTHER_FORM.
             if primary is None:
                 excluded_metadata_required += 1
             else:
                 excluded_other_form += 1
             continue
 
-        cadence_name, max_gap, live_within, period_days = cadence
-        last_filed = period_ends[-1]
-        first_filed = period_ends[0]
+        cadence_name, _max_gap, live_within = cadence
 
-        # Per-cadence liveness gate. A 20-F filer just past their
-        # 4-month deadline is NOT dark; an analogous 10-Q filer past
-        # 120 days IS dark. P2b: tickers with terminal lifecycle
-        # evidence were already excluded above — this fallback only
-        # fires for tickers with NULL lifecycle state.
-        if (today - last_filed).days > live_within:
+        # Per-cadence liveness gate. A ticker silent past the cadence
+        # window is dark and excluded BEFORE the set-difference (we do
+        # not demand SEC-filed periods from an issuer that has gone
+        # silent). Tickers with no fundamentals rows (period_ends empty)
+        # have no last-filed anchor — they fall through to the gap
+        # compute, where ``anchored`` discriminates substrate-present
+        # (genuine gap on every filed period) from substrate-absent.
+        if period_ends and (today - period_ends[-1]).days > live_within:
             excluded_dark += 1
             continue
 
-        # CONFIRMED_DATA_GAP: < 2 filings + issuer-age past grace.
-        # Brand-new listings (first filing within the cadence grace
-        # window) PASS silently — there's only one filing because the
-        # company just started reporting. A single ancient filing past
-        # the grace window IS a data hole.
-        grace_days = (
-            _NEW_LISTING_GRACE_ANNUAL_DAYS
-            if cadence_name == "annual"
-            else _NEW_LISTING_GRACE_QUARTERLY_DAYS
-        )
-        if len(period_ends) < 2:
-            if (today - first_filed).days > grace_days:
-                excluded_confirmed_data_gap += 1
-            else:
-                # New-listing grace: count as evaluated_routed (we did
-                # judge them) but no gap to detect.
-                evaluated_routed += 1
-                by_form[primary] = by_form.get(primary, 0) + 1
+        cid = cid_by_ticker.get(ticker)
+        if cid is None:
+            # A tier≤2 routed ticker with NO classification_id is an
+            # identity defect (every fundamentals/SEC row FKs to
+            # ticker_classifications.id); treat as METADATA_REQUIRED so
+            # it surfaces via the coverage sentinel rather than passing.
+            excluded_metadata_required += 1
             continue
 
-        # Routed-eligible with ≥ 2 filings — full gap evaluation.
+        routed.append((ticker, cid, cadence_name, primary))
+        cadence_by_cid[cid] = cadence_name
+
+    # ── Authoritative SEC reportDate set-difference (shared store) ─────
+    # ONE set-based call over the whole routed universe. The store keys
+    # on classification_id, filters expected periods to the cadence's
+    # routed forms, and returns per-cid (anchored, missing_periods).
+    gap_by_cid: dict[str, Any] = {}
+    if routed:
+        cids = [cid for _t, cid, _c, _f in routed]
+        async with pool.acquire() as conn:
+            gap_by_cid = await compute_filing_gaps(conn, cids, cadence_by_cid)
+
+    # ── Pass 2: verdict mapping (the false-green-critical part) ────────
+    for ticker, cid, _cadence_name, primary in routed:
+        result = gap_by_cid.get(cid)
+
+        if result is None or not result.anchored:
+            # anchored=False ⇒ ZERO sec_periodic_filings rows for this
+            # issuer. There is NO SEC periodic evidence to verify
+            # against, so we MUST NOT pass and MUST NOT fabricate a gap.
+            #   * CIK-less  ⇒ no SEC obligation we can verify ⇒
+            #     excluded-WITH-evidence (confirmed_data_gap).
+            #   * CIK-backed ⇒ the periodic-filings backfill simply
+            #     hasn't populated yet ⇒ METADATA_REQUIRED (surfaces via
+            #     the coverage sentinel; never a silent green).
+            cik = cik_by_ticker.get(ticker)
+            if cik:
+                excluded_metadata_required += 1
+            else:
+                excluded_confirmed_data_gap += 1
+            continue
+
+        # anchored=True ⇒ this issuer IS in the denominator.
         evaluated_routed += 1
         by_form[primary] = by_form.get(primary, 0) + 1
-        ticker_gaps: list[date] = []
-        for i in range(1, len(period_ends)):
-            earlier = period_ends[i - 1]
-            later = period_ends[i]
-            inferred = _infer_missing_period_ends(
-                earlier, later,
-                max_gap_days=max_gap, period_days=period_days,
-            )
-            ticker_gaps.extend(inferred)
-        if not ticker_gaps:
-            continue
 
-        # `excluded_confirmed_data_gap` extension (2026-06-03,
-        # spec PR #450 + plan PR #451).
-        #
-        # ARDT override (per plan §11): ARDT's FMP rows are rejected
-        # by physical_truth — even if the dual-source evidence accrues,
-        # the FMP `empty` is not source-unavailable, it's
-        # gate-rejected. Force ARDT into `excluded_dark` BEFORE
-        # consulting the evidence join. (FAIL → exclusion routing on
-        # this ticker; we already incremented evaluated_routed above,
-        # so decrement it and clear the ticker from the by_form tally.)
+        ticker_gaps = list(result.missing_periods)
+        if not ticker_gaps:
+            continue  # SEC evidence present + fundamentals complete ⇒ PASS
+
+        # ARDT override (per plan §11): ARDT's FMP rows are rejected by
+        # physical_truth — the FMP `empty` is gate-rejected, not
+        # source-unavailable. Force ARDT into `excluded_dark` BEFORE
+        # consulting the evidence join. (Undo the evaluated_routed /
+        # by_form increments above — it routes to an exclusion bucket.)
         if ticker in ARDT_WATCHLIST:
             excluded_dark += 1
             evaluated_routed -= 1
             by_form[primary] = max(0, by_form.get(primary, 0) - 1)
             continue
 
-        # Evidence join: route dual-source-confirmed-empty periods
-        # to `excluded_confirmed_data_gap_evidenced`. The remaining
-        # un-evidenced periods stay in the ticker's gap list →
-        # ticker FAILs on those. The freshness gate (180 days) +
-        # fetch_failure rejection are enforced inside the SQL.
+        # Evidence join: route dual-source-confirmed-empty periods to
+        # `excluded_confirmed_data_gap_evidenced`. The remaining
+        # un-evidenced periods stay in the ticker's gap list → ticker
+        # FAILs on those. The freshness gate (180 days) + fetch_failure
+        # rejection are enforced inside the SQL.
         async with pool.acquire() as conn:
             ev_rows = await conn.fetch(
                 _EVIDENCE_JOIN_SQL, ticker, sorted(ticker_gaps),
@@ -560,10 +640,13 @@ async def check_fundamentals_quarterly_completeness(
             ),
         ))
 
-    # Per-ticker cadence failures.
+    # Per-ticker cadence failures. ``missing`` is now the AUTHORITATIVE
+    # set-difference (SEC-filed reportDates absent from fundamentals) —
+    # every named date is a reportDate the SEC literally filed, not an
+    # interpolated estimate.
     for ticker, (missing, form) in sorted(ev.gaps.items()):
-        cadence_name, max_gap, _live, _period = _cadence_for(form) or (
-            "unknown", 0, 0, 0
+        cadence_name, _max_gap, _live = _cadence_for(form) or (
+            "unknown", 0, 0
         )
         shown = ", ".join(d.isoformat() for d in missing[:8])
         more = "" if len(missing) <= 8 else f" (+{len(missing) - 8} more)"
@@ -571,11 +654,12 @@ async def check_fundamentals_quarterly_completeness(
             ticker=ticker,
             reason=f"missing_period_{form}",
             expected=(
-                f"no consecutive filing gap > {max_gap} days "
-                f"(cadence={cadence_name}, form={form})"
+                f"fundamentals_quarterly to carry every SEC-filed "
+                f"reportDate (cadence={cadence_name}, form={form})"
             ),
             observed=(
-                f"{len(missing)} inferred missing period(s) at: {shown}{more}"
+                f"{len(missing)} SEC-filed reportDate(s) missing from "
+                f"fundamentals_quarterly: {shown}{more}"
             ),
         ))
 

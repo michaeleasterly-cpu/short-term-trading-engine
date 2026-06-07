@@ -65,9 +65,49 @@ def _make_pool(
     """
     evidence_by_t = evidence_rows_by_ticker or {}
 
+    # P3: derive the store's anchored / expected / have row sets from the
+    # universe ``filing_rows`` (which now carry classification_id +
+    # ``_sec_report_dates``). A real set-difference gap is what the
+    # evidence join then routes.
+    by_cid: dict[str, dict[str, Any]] = {}
+    for fr in filing_rows:
+        cid = fr.get("classification_id")
+        if cid is None:
+            continue
+        rec = by_cid.setdefault(
+            cid, {"ticker": fr["ticker"], "sec": set(), "have": set()},
+        )
+        if fr.get("period_end_date") is not None:
+            rec["have"].add(fr["period_end_date"])
+        for rd in fr.get("_sec_report_dates", ()):
+            rec["sec"].add(rd)
+
     async def _fetch(sql: str, *args: Any) -> list[dict[str, Any]]:
-        if "FROM platform.liquidity_tiers lt" in sql:
+        if "WITH liquid AS" in sql:
             return filing_rows
+        if "SELECT DISTINCT classification_id" in sql:
+            wanted = set(args[0])
+            return [
+                {"classification_id": cid}
+                for cid in wanted if by_cid.get(cid, {}).get("sec")
+            ]
+        if "FROM platform.sec_periodic_filings" in sql:
+            wanted = set(args[0])
+            out: list[dict[str, Any]] = []
+            for cid in wanted:
+                for rd in by_cid.get(cid, {}).get("sec", ()):
+                    out.append({"classification_id": cid, "report_date": rd})
+            return out
+        if ("FROM platform.fundamentals_quarterly" in sql
+                and "classification_id = ANY" in sql):
+            wanted = set(args[0])
+            out = []
+            for cid in wanted:
+                for pe in by_cid.get(cid, {}).get("have", ()):
+                    out.append(
+                        {"classification_id": cid, "period_end_date": pe}
+                    )
+            return out
         if "confirmed_data_gap_evidence" in sql:
             ticker = args[0]
             return evidence_by_t.get(ticker, [])
@@ -94,24 +134,38 @@ def _today() -> date:
 def _quarterly_filings(
     ticker: str, anchor_a: date, anchor_b: date,
 ) -> list[dict]:
-    """Two filings spanning a large quarterly gap so the inference
-    layer surfaces missing periods between them. Both anchors are
-    within the quarterly liveness window when anchor_b is recent."""
+    """P3 set-difference shape: two PRESENT filings (anchor_a, anchor_b)
+    in fundamentals, plus SEC-filed reportDates that INCLUDE intermediate
+    periods the fundamentals lacks → a genuine set-difference gap the
+    evidence join can then route.
+
+    The intermediate missing reportDates are the dates the evidence-join
+    tests reference (today-200 / today-300 / today-400), restricted to
+    those strictly between the anchors. When the anchors are close (e.g.
+    AEVA's 90/10-day pair) no intermediate date qualifies → no gap →
+    natural PASS, exactly the old behavior these tests pinned."""
+    today = _today()
+    candidate_missing = [
+        today - timedelta(days=200),
+        today - timedelta(days=300),
+        today - timedelta(days=400),
+    ]
+    lo, hi = min(anchor_a, anchor_b), max(anchor_a, anchor_b)
+    missing = [d for d in candidate_missing if lo < d < hi]
+    sec_dates = [anchor_a, anchor_b, *missing]
+    cid = f"c-{ticker}"
     return [
         {
             "ticker": ticker,
-            "period_end_date": anchor_a,
+            "classification_id": cid,
+            "cik": "0001",
+            "period_end_date": pe,
             "sec_document_type_primary": "10-Q",
             "issuer_lifecycle_state": None,
             "issuer_lifecycle_event_date": None,
-        },
-        {
-            "ticker": ticker,
-            "period_end_date": anchor_b,
-            "sec_document_type_primary": "10-Q",
-            "issuer_lifecycle_state": None,
-            "issuer_lifecycle_event_date": None,
-        },
+            "_sec_report_dates": sec_dates,
+        }
+        for pe in (anchor_a, anchor_b)
     ]
 
 
@@ -130,7 +184,7 @@ async def test_ardt_watchlist_forces_excluded_dark() -> None:
     pool = _make_pool(
         filing_rows=_quarterly_filings(
             "ARDT",
-            today - timedelta(days=200),
+            today - timedelta(days=500),
             today - timedelta(days=10),
         ),
     )
@@ -247,22 +301,11 @@ async def test_aeva_shape_sec_yielded_does_not_exclude() -> None:
     # path) → the cadence check sees no gap at all → no evidence join
     # fires for it. AEVA lands in evaluated_routed → PASS.
     pool = _make_pool(
-        filing_rows=[
-            {
-                "ticker": "AEVA",
-                "period_end_date": today - timedelta(days=90),
-                "sec_document_type_primary": "10-Q",
-                "issuer_lifecycle_state": None,
-                "issuer_lifecycle_event_date": None,
-            },
-            {
-                "ticker": "AEVA",
-                "period_end_date": today - timedelta(days=10),
-                "sec_document_type_primary": "10-Q",
-                "issuer_lifecycle_state": None,
-                "issuer_lifecycle_event_date": None,
-            },
-        ],
+        filing_rows=_quarterly_filings(
+            "AEVA",
+            today - timedelta(days=90),
+            today - timedelta(days=10),
+        ),
     )
     ev = await _evaluate(pool)
     assert "AEVA" not in ev.gaps, (
@@ -333,23 +376,24 @@ def test_check_result_shape_unchanged() -> None:
 
 
 # ──────────────────────────────────────────────────────────────────────
-# Test 8 — ``_infer_missing_period_ends`` byte-freeze sentinel
+# Test 8 — gap math delegates to the shared store (P3)
 # ──────────────────────────────────────────────────────────────────────
 
 
-def test_infer_missing_period_ends_byte_frozen() -> None:
-    """The inference function MUST be unchanged in this arc (per spec
-    §14 + plan §16 + the hard rules in the implementation handoff).
-    A sha256 pin of the source defends against accidental drift."""
-    src = inspect.getsource(fqc._infer_missing_period_ends)
-    sha = hashlib.sha256(src.encode("utf-8")).hexdigest()
-    # If this function is legitimately changed in a follow-up arc,
-    # update the hash deliberately. Drift in THIS PR red-lights.
-    assert sha == (
-        "372df1e041178f63c978b3e5ebb6e5035797db3dcfbd9ecddd651f3f79a29124"
-    ), (
-        "_infer_missing_period_ends source drifted unexpectedly. "
-        "Update this hash only if the change is deliberate."
+def test_gap_math_delegates_to_shared_store() -> None:
+    """P3: the validator no longer carries a private interpolation
+    helper (``_infer_missing_period_ends`` was deleted); the gap math is
+    the shared store's authoritative set-difference. Pin that the
+    validator imports + uses ``compute_filing_gaps`` so detector/healer
+    parity is real (one helper)."""
+    assert not hasattr(fqc, "_infer_missing_period_ends"), (
+        "the interpolation helper must be gone — the gap is now the SEC "
+        "reportDate set-difference via the shared store"
+    )
+    src = inspect.getsource(fqc._evaluate)
+    assert "compute_filing_gaps" in src, (
+        "_evaluate must delegate the gap math to the shared store's "
+        "compute_filing_gaps"
     )
 
 
@@ -358,18 +402,18 @@ def test_infer_missing_period_ends_byte_frozen() -> None:
 # ──────────────────────────────────────────────────────────────────────
 
 
-def test_filing_dates_sql_byte_frozen_to_p1_hash() -> None:
-    """Mirror the P0 sentinel — validator universe SQL is unchanged
-    by this arc (only the per-period evidence join is added; the
-    universe scan is preserved)."""
+def test_filing_dates_sql_byte_frozen_to_p3_hash() -> None:
+    """Mirror the P0 sentinel — the P3 universe SQL is anchored on
+    ticker_classifications + carries classification_id / cik. Pin the
+    hash so the evidence-join extension can't silently drift it."""
     sha = hashlib.sha256(
         fqc._FILING_DATES_SQL.encode("utf-8"),
     ).hexdigest()
     assert sha == (
-        "15ead84d3ecb6416c4bbb952f11d1a4329c560f9aef8269dd1c39234e195e49c"
+        "3517b01ca565d3383d8586fcac881808426dbd77298bad322efc27482a3ac380"
     ), (
-        "_FILING_DATES_SQL drifted during the evidence-join extension. "
-        "Hard rule: no validator universe SQL change in this arc."
+        "_FILING_DATES_SQL drifted from the P3 set-difference shape. "
+        "Update this hash only if the universe SQL change is deliberate."
     )
 
 
