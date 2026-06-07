@@ -400,7 +400,7 @@ class SECCompanyFactsAdapter:
             # primary-type classification (10-Q/A → counts toward 10-Q).
             base_counter: Counter = Counter()
             for form, count in periodic_counter.items():
-                base = form.rstrip("/A").rstrip("/")
+                base = _base_form(form)
                 base_counter[base] += count
 
             max_count = max(base_counter.values())
@@ -412,7 +412,7 @@ class SECCompanyFactsAdapter:
                 # newest. Compare on filingDate.
                 most_recent_by_base: dict[str, _date] = {}
                 for form, fd, _rd in periodic_rows:
-                    base = form.rstrip("/A").rstrip("/")
+                    base = _base_form(form)
                     if base in top and fd is not None:
                         cur = most_recent_by_base.get(base)
                         if cur is None or fd > cur:
@@ -479,7 +479,11 @@ class SECCompanyFactsAdapter:
                 )
             )
         if skipped_periodic:
-            logger.debug(
+            # Promoted debug→info (safety review #4): a periodic-filing row
+            # skipped for a missing filing_date / accession_number shrinks the
+            # SEC periodic-filings substrate; that systematic shrinkage must be
+            # visible without enabling debug logging.
+            logger.info(
                 "sec.companyfacts.extract_filing_metadata.periodic_skipped",
                 skipped=skipped_periodic,
             )
@@ -894,6 +898,22 @@ def _extract_lifecycle_events(
         "derived_event_date": derived_event_date,
         "derived_evidence_url": derived_evidence_url,
     }
+
+
+def _base_form(form_type: str) -> str:
+    """Collapse an amendment variant to its base form (``10-Q/A`` →
+    ``10-Q``); a non-amendment form is returned unchanged.
+
+    Safety review #5: replaces the previous ``form.rstrip("/A").rstrip("/")``
+    char-SET strip (which would also chew a trailing ``A`` or ``/`` off a
+    non-amendment form). A proper suffix strip is correct AND avoids a
+    sec→quality import edge — ``tpcore.quality.sec_periodic_filings_store``
+    has an identical ``base_form`` helper, but importing it here would invert
+    the layering (the SEC extraction layer sits BELOW the quality gate, and
+    no other runtime edge crosses that boundary today). Keeping a local
+    suffix-strip is the non-coupling choice.
+    """
+    return form_type[:-2] if form_type.endswith("/A") else form_type
 
 
 def _parse_fiscal_year_end_mmdd(raw: str | None) -> int | None:

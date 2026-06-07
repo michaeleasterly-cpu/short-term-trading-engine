@@ -383,6 +383,121 @@ async def test_anchored_false_cik_backed_surfaces_metadata_required() -> None:
             if f.ticker.startswith("NEW")] == []
 
 
+# ── Zero-anchored universe → structural FAIL (safety review #1) ──────
+
+
+async def test_zero_anchored_universe_with_exclusions_fails() -> None:
+    """A routed universe that anchored ZERO issuers while excluding some
+    must HARD-FAIL with the ``<zero_anchored_universe>`` sentinel — never a
+    vacuous PASS. Here every issuer is CIK-LESS un-anchored ⇒ all route to
+    confirmed_data_gap (which is OMITTED from the coverage-ratio denominator,
+    so the metadata-coverage sentinel alone would NOT fire — this is exactly
+    the gap the structural guard closes)."""
+    cikless = [
+        _Issuer(
+            f"DARK{i}", cid=f"c-dark-{i}", cik=None, primary="10-Q",
+            sec_report_dates=[], have=[],  # anchored=False, CIK-less
+        )
+        for i in range(3)
+    ]
+    result = await check_fundamentals_quarterly_completeness(_Pool(cikless))
+    assert result.passed is False, [f.observed for f in result.failures]
+    sentinel = [
+        f for f in result.failures
+        if f.reason == "zero_anchored_universe"
+    ]
+    assert len(sentinel) == 1
+    assert sentinel[0].ticker == "<zero_anchored_universe>"
+    # The confirmed_data_gap count surfaces in the observed text.
+    assert "confirmed_data_gap=3" in sentinel[0].observed
+
+
+async def test_zero_anchored_metadata_required_only_also_fails() -> None:
+    """Same structural guard when the entire universe routes to
+    metadata_required (CIK-backed un-anchored): zero anchored ⇒ FAIL."""
+    cik_backed = [
+        _Issuer(
+            f"NEW{i}", cid=f"c-new-{i}", cik=f"00{i:05d}", primary="10-Q",
+            sec_report_dates=[], have=[],  # anchored=False, CIK-backed
+        )
+        for i in range(3)
+    ]
+    result = await check_fundamentals_quarterly_completeness(_Pool(cik_backed))
+    assert result.passed is False
+    assert any(
+        f.reason == "zero_anchored_universe" for f in result.failures
+    )
+
+
+async def test_some_anchored_does_not_trip_zero_anchored_guard() -> None:
+    """A single anchored clean filer keeps the zero-anchored guard silent
+    even when the rest of the universe is excluded — the guard fires only
+    on a TRULY zero-anchored universe."""
+    cikless = [
+        _Issuer(
+            f"DARK{i}", cid=f"c-dark-{i}", cik=None, primary="10-Q",
+            sec_report_dates=[], have=[],
+        )
+        for i in range(3)
+    ]
+    pool = _Pool([*cikless, *_clean_padding(1)])
+    result = await check_fundamentals_quarterly_completeness(pool)
+    assert [
+        f for f in result.failures if f.reason == "zero_anchored_universe"
+    ] == []
+
+
+# ── Empty-string CIK routes to metadata_required (safety review #2) ──
+
+
+async def test_empty_string_cik_routes_metadata_required_not_confirmed_gap() -> None:
+    """A CIK-BACKED issuer whose ``cik`` is corrupt (empty string) and is
+    ``anchored=False`` must surface as METADATA_REQUIRED (sentinel-visible),
+    NOT confirmed_data_gap (sentinel-blind). With it dominating the universe
+    the metadata-coverage sentinel must fire — proving the empty-string CIK
+    landed in the surfacing bucket. A genuinely CIK-less (None) issuer in the
+    SAME universe stays in confirmed_data_gap (does NOT count toward
+    coverage), so only the empty-string defect drives the sentinel."""
+    empty_cik = [
+        _Issuer(
+            f"CORRUPT{i}", cid=f"c-corrupt-{i}", cik="", primary="10-Q",
+            sec_report_dates=[], have=[],  # anchored=False, empty CIK
+        )
+        for i in range(4)
+    ]
+    clean = _clean_padding(1)
+    result = await check_fundamentals_quarterly_completeness(
+        _Pool([*empty_cik, *clean])
+    )
+    # 4 metadata_required / (4 + 1 evaluated) = 80% > 25% ⇒ sentinel fires.
+    assert result.passed is False
+    assert any(
+        f.reason == "metadata_coverage_insufficient" for f in result.failures
+    )
+    # The empty-CIK issuers are NOT fabricated per-ticker gaps.
+    assert [f for f in result.failures
+            if f.ticker.startswith("CORRUPT")] == []
+
+
+async def test_whitespace_cik_routes_metadata_required() -> None:
+    """A whitespace-only CIK (``'  '``) is treated identically to empty —
+    routes to METADATA_REQUIRED, not confirmed_data_gap."""
+    ws_cik = [
+        _Issuer(
+            f"WS{i}", cid=f"c-ws-{i}", cik="   ", primary="10-Q",
+            sec_report_dates=[], have=[],
+        )
+        for i in range(4)
+    ]
+    result = await check_fundamentals_quarterly_completeness(
+        _Pool([*ws_cik, *_clean_padding(1)])
+    )
+    assert result.passed is False
+    assert any(
+        f.reason == "metadata_coverage_insufficient" for f in result.failures
+    )
+
+
 # ── Liveness gate: dark quarterly filer excluded, not flagged ────────
 
 

@@ -230,6 +230,7 @@ REPAIR_LOOKBACK_BUFFER_DAYS = 14
 # parallel to the existing ``<universe>`` empty-universe sentinel).
 _METADATA_COVERAGE_SENTINEL_TICKER = "<metadata_coverage>"
 _UNIVERSE_SENTINEL_TICKER = "<universe>"
+_ZERO_ANCHORED_SENTINEL_TICKER = "<zero_anchored_universe>"
 
 # P2b (2026-05-31): terminal lifecycle states from the issuer-lifecycle
 # evidence model (migration 20260530_0300; populated by the
@@ -349,6 +350,12 @@ class _Evaluation:
     # Set when the metadata-coverage sentinel must additionally fire.
     metadata_coverage_low: bool = False
     metadata_coverage_ratio: float = 0.0
+    # Set when the routed universe anchored ZERO issuers yet excluded some
+    # (metadata_required + confirmed_data_gap > 0) — a structural FAIL
+    # (safety review #1): a routed universe with no anchored evidence must
+    # never be GREEN, even when coverage_ratio (which omits confirmed_data_gap)
+    # reads 0.0.
+    zero_anchored_with_exclusions: bool = False
 
 
 def _cadence_for(primary_form: str | None) -> tuple[str, int, int] | None:
@@ -515,10 +522,25 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
             #   * CIK-backed ⇒ the periodic-filings backfill simply
             #     hasn't populated yet ⇒ METADATA_REQUIRED (surfaces via
             #     the coverage sentinel; never a silent green).
-            cik = cik_by_ticker.get(ticker)
-            if cik:
+            #
+            # Empty-string-CIK routing (safety review #2): a corrupt
+            # ``cik=''`` (or whitespace) is FALSY but is NOT the same as a
+            # genuinely CIK-less issuer — it is an identity DEFECT that must
+            # be sentinel-VISIBLE. So ``confirmed_data_gap`` (sentinel-blind)
+            # is reserved for the genuinely-CIK-less case (the column value
+            # is None); a present-but-empty CIK value routes to
+            # METADATA_REQUIRED (the identity-defect-visible bucket, fed to
+            # the coverage sentinel) alongside the CIK-backed-not-yet-backfilled
+            # case. ``cik`` (stripped, present) keeps the normal CIK-backed path.
+            raw_cik = cik_by_ticker.get(ticker)
+            cik = (raw_cik or "").strip()
+            if cik or raw_cik is not None:
+                # CIK-backed (valid) OR present-but-empty/whitespace (defect):
+                # both surface via the metadata-coverage sentinel.
                 excluded_metadata_required += 1
             else:
+                # Genuinely CIK-less (no column value): no SEC obligation we
+                # can verify ⇒ excluded-with-evidence (confirmed_data_gap).
                 excluded_confirmed_data_gap += 1
             continue
 
@@ -572,6 +594,20 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
         coverage_ratio > METADATA_COVERAGE_FAIL_THRESHOLD
     )
 
+    # Zero-anchored-universe structural guard (safety review #1). A routed
+    # universe that anchored ZERO issuers (``evaluated_routed == 0``) while
+    # SOME issuers were excluded as metadata_required and/or confirmed_data_gap
+    # is NOT a vacuous PASS — there is no green evidence anywhere, only
+    # exclusions. The coverage ratio above is computed on a denominator that
+    # OMITS confirmed_data_gap, so a universe that is 100% confirmed_data_gap
+    # has coverage_ratio == 0.0 and would slip through as GREEN. Force a
+    # structural FAIL so a routed-but-fully-unanchored universe can never be
+    # GREEN.
+    zero_anchored_with_exclusions = (
+        evaluated_routed == 0
+        and (excluded_metadata_required + excluded_confirmed_data_gap) > 0
+    )
+
     return _Evaluation(
         sentinel=None,
         evaluated_routed=evaluated_routed,
@@ -587,6 +623,7 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
         gaps=gaps,
         metadata_coverage_low=metadata_coverage_low,
         metadata_coverage_ratio=coverage_ratio,
+        zero_anchored_with_exclusions=zero_anchored_with_exclusions,
     )
 
 
@@ -617,6 +654,32 @@ async def check_fundamentals_quarterly_completeness(
         )
 
     failures: list[FailureDetail] = []
+
+    # Zero-anchored-universe structural sentinel (safety review #1) —
+    # prepended FIRST: a routed universe that anchored zero issuers while
+    # excluding some is a vacuous-pass risk and must hard-FAIL. Emitted
+    # before the metadata-coverage sentinel because it is the more
+    # fundamental "no green evidence anywhere" condition.
+    if ev.zero_anchored_with_exclusions:
+        excluded_total = (
+            ev.excluded_metadata_required + ev.excluded_confirmed_data_gap
+        )
+        failures.append(FailureDetail(
+            ticker=_ZERO_ANCHORED_SENTINEL_TICKER,
+            reason="zero_anchored_universe",
+            expected=(
+                "≥ 1 routed issuer ANCHORED on platform.sec_periodic_filings "
+                "(SEC periodic evidence to verify against)"
+            ),
+            observed=(
+                f"zero anchored issuers in the routed universe while "
+                f"{excluded_total} were excluded "
+                f"(metadata_required={ev.excluded_metadata_required}, "
+                f"confirmed_data_gap={ev.excluded_confirmed_data_gap}) — "
+                f"no green SEC evidence anywhere; extend the SEC "
+                f"periodic-filings backfill before trusting this gate"
+            ),
+        ))
 
     # Metadata-coverage structural sentinel — prepended so the
     # operator-visible signal is preserved even when MAX_REPORTED

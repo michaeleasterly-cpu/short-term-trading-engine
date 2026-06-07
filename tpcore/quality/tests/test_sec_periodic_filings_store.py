@@ -386,6 +386,160 @@ async def test_compute_filing_gaps_recycled_gap_row_not_credited() -> None:
     assert out["cid-CURRENT"].missing_periods == (date(2025, 6, 30),)
 
 
+# ── _HAVE_SQL UNION: real arm-A + arm-B window-join modeling ───────────
+
+
+class _UnionHaveConn:
+    """Fake conn that MODELS the ``_HAVE_SQL`` two-arm UNION semantics.
+
+    Unlike ``_FakeConn`` (which returns the post-UNION have-set directly),
+    this conn is fed the RAW substrate the UNION reads — directly-stamped
+    fundamentals rows (arm A: ``classification_id`` non-NULL) and NULL-cid
+    fundamentals rows (arm B candidates) + the ``ticker_history`` window
+    rows — and computes the UNION itself, EXERCISING the half-open window
+    predicate (``valid_from <= period_end_date < valid_to``). This proves a
+    NULL-cid predecessor-period row is NOT credited to the current holder
+    while an in-window NULL-cid period IS.
+    """
+
+    def __init__(
+        self,
+        *,
+        anchored: list[str],
+        expected: list[dict[str, Any]],
+        stamped_have: list[dict[str, Any]],
+        null_cid_have: list[dict[str, Any]],
+        ticker_history: list[dict[str, Any]],
+    ) -> None:
+        self._anchored = [{"classification_id": c} for c in anchored]
+        self._expected = expected
+        # arm A: directly-stamped (classification_id, period_end_date) rows.
+        self._stamped = stamped_have
+        # NULL-cid fundamentals rows: (ticker, period_end_date).
+        self._null_cid = null_cid_have
+        # ticker_history windows: (ticker, classification_id, valid_from,
+        # valid_to|None).
+        self._history = ticker_history
+
+    def _union_have(self, cids: set[str]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        # arm A — directly-stamped rows for the requested cids.
+        for r in self._stamped:
+            if r["classification_id"] in cids:
+                out.append({
+                    "classification_id": r["classification_id"],
+                    "period_end_date": r["period_end_date"],
+                })
+        # arm B — NULL-cid rows credited via the ticker_history half-open
+        # window (valid_from <= period_end_date < valid_to|+inf).
+        for nc in self._null_cid:
+            for th in self._history:
+                if th["ticker"] != nc["ticker"]:
+                    continue
+                if th["classification_id"] not in cids:
+                    continue
+                pe = nc["period_end_date"]
+                if th["valid_from"] <= pe and (
+                    th["valid_to"] is None or pe < th["valid_to"]
+                ):
+                    out.append({
+                        "classification_id": th["classification_id"],
+                        "period_end_date": pe,
+                    })
+        return out
+
+    async def fetch(self, sql: str, *args: Any) -> list[dict[str, Any]]:
+        if "DISTINCT classification_id" in sql:
+            cids = set(args[0])
+            return [r for r in self._anchored
+                    if r["classification_id"] in cids]
+        if "FROM platform.sec_periodic_filings" in sql:
+            cids = set(args[0])
+            return [r for r in self._expected
+                    if r["classification_id"] in cids]
+        if "FROM platform.fundamentals_quarterly" in sql:
+            return self._union_have(set(args[0]))
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+
+@pytest.mark.asyncio
+async def test_union_arm_b_window_credits_in_window_not_predecessor() -> None:
+    """Recycled-ticker safety at the WINDOW-PREDICATE level (the real
+    arm-A + arm-B UNION, not a stub).
+
+    Ticker ``RCYC`` was used by a PREDECESSOR entity (cid-OLD, window
+    2010-01-01..2018-01-01) then re-issued to the CURRENT holder (cid-CUR,
+    window 2018-01-01..open). Two NULL-cid fundamentals rows exist:
+
+      * 2016-06-30 — falls in the PREDECESSOR window ⇒ must NOT be credited
+        to cid-CUR.
+      * 2025-06-30 — falls in the CURRENT-holder window ⇒ MUST be credited
+        to cid-CUR.
+
+    cid-CUR expects both reportDates. Only the predecessor period stays
+    missing; the in-window period is satisfied via the arm-B window join."""
+    conn = _UnionHaveConn(
+        anchored=["cid-CUR"],
+        expected=[
+            {"classification_id": "cid-CUR", "report_date": date(2016, 6, 30)},
+            {"classification_id": "cid-CUR", "report_date": date(2025, 6, 30)},
+        ],
+        stamped_have=[],  # no directly-stamped rows for cid-CUR
+        null_cid_have=[
+            {"ticker": "RCYC", "period_end_date": date(2016, 6, 30)},
+            {"ticker": "RCYC", "period_end_date": date(2025, 6, 30)},
+        ],
+        ticker_history=[
+            {"ticker": "RCYC", "classification_id": "cid-OLD",
+             "valid_from": date(2010, 1, 1), "valid_to": date(2018, 1, 1)},
+            {"ticker": "RCYC", "classification_id": "cid-CUR",
+             "valid_from": date(2018, 1, 1), "valid_to": None},
+        ],
+    )
+    out = await compute_filing_gaps(
+        conn,  # type: ignore[arg-type]
+        ["cid-CUR"],
+        {"cid-CUR": "quarterly"},
+    )
+    assert out["cid-CUR"].anchored is True
+    # Predecessor-period reportDate NOT credited → stays missing; the
+    # in-window period IS credited → satisfied.
+    assert out["cid-CUR"].missing_periods == (date(2016, 6, 30),)
+
+
+@pytest.mark.asyncio
+async def test_union_arm_b_boundary_is_half_open() -> None:
+    """The window predicate is HALF-OPEN: ``valid_from <= pe < valid_to``.
+    A period_end exactly on the predecessor's ``valid_to`` (= the current
+    holder's ``valid_from``) belongs to the CURRENT holder, not the
+    predecessor — so it IS credited to cid-CUR."""
+    boundary = date(2018, 1, 1)
+    conn = _UnionHaveConn(
+        anchored=["cid-CUR"],
+        expected=[
+            {"classification_id": "cid-CUR", "report_date": boundary},
+        ],
+        stamped_have=[],
+        null_cid_have=[
+            {"ticker": "RCYC", "period_end_date": boundary},
+        ],
+        ticker_history=[
+            {"ticker": "RCYC", "classification_id": "cid-OLD",
+             "valid_from": date(2010, 1, 1), "valid_to": boundary},
+            {"ticker": "RCYC", "classification_id": "cid-CUR",
+             "valid_from": boundary, "valid_to": None},
+        ],
+    )
+    out = await compute_filing_gaps(
+        conn,  # type: ignore[arg-type]
+        ["cid-CUR"],
+        {"cid-CUR": "quarterly"},
+    )
+    # pe == cid-CUR.valid_from (>=) and pe == cid-OLD.valid_to (NOT < ) ⇒
+    # credited to cid-CUR only ⇒ no gap.
+    assert out["cid-CUR"].missing_periods == ()
+
+
 # ── write_periodic_filings column wiring + chunking ────────────────────
 
 
