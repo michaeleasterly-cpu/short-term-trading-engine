@@ -199,12 +199,20 @@ def _resolve_horizon() -> date:
     the documented :data:`FUNDAMENTALS_COMPLETENESS_HORIZON_DEFAULT`. A
     malformed override is logged and ignored (fail-safe to the default — a
     bad env var must never silently widen OR narrow the safety gate).
+
+    WIDEN-ONLY CLAMP (safety review #3): an override may only move the
+    horizon EARLIER than the default (which WIDENS the failing set — strictly
+    safe: more pre-horizon SEC depth is brought back in-scope). An override
+    LATER than the default would NARROW the gate (shrink the failing set,
+    mask recent-ish gaps) and is REJECTED — ignored with a ``logger.warning``
+    and the default used instead. Any active horizon that differs from the
+    default is logged at WARNING so a shift is always loud.
     """
     raw = os.getenv(_FUNDAMENTALS_HORIZON_ENV)
     if not raw:
         return FUNDAMENTALS_COMPLETENESS_HORIZON_DEFAULT
     try:
-        return date.fromisoformat(raw.strip())
+        parsed = date.fromisoformat(raw.strip())
     except ValueError:
         logger.warning(
             "tpcore.validation.fundamentals_completeness.bad_horizon_env",
@@ -213,6 +221,29 @@ def _resolve_horizon() -> date:
             fallback=FUNDAMENTALS_COMPLETENESS_HORIZON_DEFAULT.isoformat(),
         )
         return FUNDAMENTALS_COMPLETENESS_HORIZON_DEFAULT
+
+    if parsed > FUNDAMENTALS_COMPLETENESS_HORIZON_DEFAULT:
+        # Later than default ⇒ NARROWING (shrinks the failing set) ⇒ REJECT.
+        # A forward override could silently mask gaps the gate must catch.
+        logger.warning(
+            "tpcore.validation.fundamentals_completeness.horizon_override_rejected_narrowing",
+            env=_FUNDAMENTALS_HORIZON_ENV,
+            value=parsed.isoformat(),
+            default=FUNDAMENTALS_COMPLETENESS_HORIZON_DEFAULT.isoformat(),
+            reason="override later than default would narrow the gate; ignored",
+        )
+        return FUNDAMENTALS_COMPLETENESS_HORIZON_DEFAULT
+
+    if parsed != FUNDAMENTALS_COMPLETENESS_HORIZON_DEFAULT:
+        # Earlier than default ⇒ WIDENING (safe) ⇒ honoured, but logged LOUD
+        # so any active shift from the documented default is operator-visible.
+        logger.warning(
+            "tpcore.validation.fundamentals_completeness.horizon_override_widened",
+            env=_FUNDAMENTALS_HORIZON_ENV,
+            value=parsed.isoformat(),
+            default=FUNDAMENTALS_COMPLETENESS_HORIZON_DEFAULT.isoformat(),
+        )
+    return parsed
 
 
 # Module-level convenience constant (the resolved horizon at import time;
@@ -430,6 +461,15 @@ class _Evaluation:
     # metadata-coverage sentinel numerator/denominator (it is not a real
     # coverage gap).
     excluded_non_filer: int = 0
+    # Identity-contradiction counter (safety review #1). Count of issuers
+    # that are anchored=True (REAL SEC periodic filings) yet whose
+    # asset_class label is one of the non-operating classes ({etf, etn,
+    # fund}). An "etf" that files 10-Qs is an identity contradiction
+    # (asset_class is OpenFIGI-derived and NOT authoritative; a misclassified
+    # operating filer). Such issuers are evaluated NORMALLY (gaps FAIL) — the
+    # contradiction is NOT masked. This counter makes the contradiction
+    # operator-visible (it never affects PASS/FAIL on its own).
+    non_operating_anchored_contradiction: int = 0
     # ≥2016 horizon bucket (2026-06-07). Total count of expected SEC
     # report_dates that fell BEFORE the horizon across all anchored routed
     # issuers — excluded-WITH-evidence (the reportDate exists in
@@ -444,10 +484,12 @@ class _Evaluation:
     metadata_coverage_low: bool = False
     metadata_coverage_ratio: float = 0.0
     # Set when the routed universe anchored ZERO issuers yet excluded some
-    # (metadata_required + confirmed_data_gap > 0) — a structural FAIL
-    # (safety review #1): a routed universe with no anchored evidence must
-    # never be GREEN, even when coverage_ratio (which omits confirmed_data_gap)
-    # reads 0.0.
+    # (ANY exclusion bucket non-empty) — a structural FAIL (safety review #2):
+    # a routed universe with no anchored evidence must NEVER be GREEN, even
+    # when coverage_ratio (which omits confirmed_data_gap + the other
+    # exclusion buckets) reads 0.0. The guard sums ALL exclusion buckets so a
+    # universe that is entirely excluded_non_filer / excluded_pre_horizon /
+    # excluded_dark / … can never read GREEN by emptying the failing set.
     zero_anchored_with_exclusions: bool = False
 
 
@@ -540,6 +582,7 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
     excluded_other_form = 0
     excluded_lifecycle_terminated = 0
     excluded_non_filer = 0
+    non_operating_anchored_contradiction = 0
     excluded_pre_horizon = 0
     horizon = _resolve_horizon()
     by_form: dict[str, int] = {}
@@ -552,6 +595,9 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
     # against ``platform.sec_periodic_filings`` by the shared store.
     routed: list[tuple[str, str, str, str]] = []  # (ticker, cid, cadence, form)
     cadence_by_cid: dict[str, str] = {}
+    # Non-operating asset_class set, captured in Pass 1 for the
+    # anchored-gated non_filer decision in Pass 2 (safety review #1).
+    non_operating_by_ticker: dict[str, bool] = {}
 
     for ticker, period_ends in per_ticker.items():
         # P2b: evidence-first routing. Form 25 / Form 15 evidence of
@@ -561,36 +607,51 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
             excluded_lifecycle_terminated += 1
             continue
 
-        # Non-operating-entity routing (2026-06-07, CHANGE 2). asset_class ∈
-        # {etf, etn, fund} has NO 10-Q/10-K periodic-report obligation
-        # (funds/ETFs/ETNs file N-1A / N-CSR etc., not operating-company
-        # periodic reports). Route to ``excluded_non_filer`` (excluded-WITH-
-        # evidence: the asset_class IS the evidence) — explicitly OUT of the
-        # metadata-coverage sentinel. This is checked HERE, before cadence
-        # routing, because in live data the dominant non-operating population
-        # has a NULL ``sec_document_type_primary`` and would otherwise be
-        # mis-counted as ``excluded_metadata_required`` (a false coverage
-        # gap) by the NULL-primary branch below.
+        # Non-operating-entity classification (2026-06-07, CHANGE 2;
+        # ANCHORED-GATED 2026-06-07 safety review #1). asset_class ∈
+        # {etf, etn, fund} has NO 10-Q/10-K periodic-report obligation IF the
+        # issuer truly is non-operating — but asset_class is OpenFIGI-derived
+        # and NOT authoritative (documented misclassification precedent). The
+        # dispositive signal of "operating filer" is ``anchored`` (HAS real
+        # SEC periodic filings), which is only known AFTER
+        # ``compute_filing_gaps``. So we MUST NOT short-circuit to
+        # ``excluded_non_filer`` here in Pass 1: a misclassified OPERATING
+        # filer (asset_class wrongly 'etf' but anchored=True with real 10-Qs
+        # and real ≥2016 gaps) would be masked before evidence is consulted.
         #
-        # FAIL-CLOSED: only the explicit non-operating classes are excluded.
-        # A NULL / ambiguous / unrecognised asset_class is NOT classified
-        # non-operating — it proceeds to the normal routing (sentinel-visible).
-        # SPACs (asset_class='spac') are NOT in this set: a SPAC routes by its
-        # normal path (a SPAC with a real sec_document_type_primary stays in
-        # the routed denominator; a NULL-primary SPAC → metadata_required;
-        # a CIK-less anchored=False SPAC → confirmed_data_gap).
+        # The non_filer decision is DEFERRED to Pass 2 (where ``anchored`` is
+        # known): an anchored=False non-operating-asset_class issuer →
+        # excluded_non_filer; an anchored=True one is an identity
+        # CONTRADICTION (an "etf" that files 10-Qs) that must SURFACE and be
+        # evaluated normally (gaps FAIL), counted in
+        # ``non_operating_anchored_contradiction``.
+        #
+        # FAIL-CLOSED: only the explicit non-operating classes are flagged.
+        # A NULL / ambiguous / unrecognised asset_class is NOT flagged
+        # non-operating — it can never route to non_filer.
         asset_class = (asset_class_by_ticker.get(ticker) or "").strip().lower()
-        if asset_class in _NON_OPERATING_ASSET_CLASSES:
-            excluded_non_filer += 1
-            continue
+        is_non_operating = asset_class in _NON_OPERATING_ASSET_CLASSES
+        non_operating_by_ticker[ticker] = is_non_operating
 
         primary = primary_by_ticker.get(ticker)
         cadence = _cadence_for(primary)
         if cadence is None:
-            # NULL primary form → METADATA_REQUIRED; any other non-routed
-            # form (e.g. ``N-1A`` for closed-end funds) → OTHER_FORM.
+            # The form is not routable, so this issuer can never reach Pass 2
+            # (where anchored is computed). Resolve its bucket here:
+            #   * NULL primary + non-operating asset_class → excluded_non_filer
+            #     (it has no routable form AND no operating obligation; the
+            #     asset_class is the only evidence, and there is no anchored
+            #     signal to contradict it). This preserves the live-data
+            #     behaviour: the dominant non-operating population has a NULL
+            #     primary and would otherwise inflate metadata_required.
+            #   * NULL primary + operating/ambiguous asset_class →
+            #     METADATA_REQUIRED (a real coverage gap, sentinel-visible).
+            #   * Any non-NULL non-routed form (e.g. ``N-1A``) → OTHER_FORM.
             if primary is None:
-                excluded_metadata_required += 1
+                if is_non_operating:
+                    excluded_non_filer += 1
+                else:
+                    excluded_metadata_required += 1
             else:
                 excluded_other_form += 1
             continue
@@ -641,12 +702,17 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
             # issuer. There is NO SEC periodic evidence to verify
             # against, so we MUST NOT pass and MUST NOT fabricate a gap.
             #
-            # NOTE: non-operating entities (asset_class ∈ {etf, etn, fund})
-            # never reach here — they are routed to ``excluded_non_filer`` in
-            # Pass 1 (before cadence routing), so by this point every routed
-            # issuer is an OPERATING company (stock / reit / adr / preferred /
-            # cef / spac) or has a NULL/ambiguous asset_class. The CIK-based
-            # routing below is therefore the correct OPERATING-company path.
+            # NON-OPERATING gate (safety review #1): an anchored=False issuer
+            # whose asset_class ∈ {etf, etn, fund} has no operating-company
+            # periodic obligation AND no anchored evidence to contradict that
+            # label ⇒ excluded_non_filer (excluded-WITH-evidence: the
+            # asset_class is the evidence). This is the ONLY place a routed
+            # issuer becomes non_filer — it requires BOTH the non-operating
+            # label AND anchored=False. (An anchored=True non-operating-label
+            # issuer falls through to the contradiction path below.)
+            if non_operating_by_ticker.get(ticker, False):
+                excluded_non_filer += 1
+                continue
             #
             # CIK-based routing for OPERATING / ambiguous issuers:
             #   * CIK-less  ⇒ no SEC obligation we can verify ⇒
@@ -679,6 +745,15 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
         # anchored=True ⇒ this issuer IS in the denominator.
         evaluated_routed += 1
         by_form[primary] = by_form.get(primary, 0) + 1
+
+        # Identity-contradiction surface (safety review #1): an anchored=True
+        # issuer whose asset_class label is non-operating ({etf, etn, fund})
+        # is an "etf" that files 10-Qs — a misclassification (asset_class is
+        # OpenFIGI-derived, not authoritative). It is evaluated NORMALLY here
+        # (real filings ⇒ real gaps FAIL); the contradiction is NOT masked.
+        # We only TALLY it so the operator can see it (never affects PASS/FAIL).
+        if non_operating_by_ticker.get(ticker, False):
+            non_operating_anchored_contradiction += 1
 
         # ≥2016 horizon (CHANGE 1): the store already removed pre-horizon
         # expected reportDates from ``missing_periods``; accumulate the
@@ -733,18 +808,27 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
         coverage_ratio > METADATA_COVERAGE_FAIL_THRESHOLD
     )
 
-    # Zero-anchored-universe structural guard (safety review #1). A routed
-    # universe that anchored ZERO issuers (``evaluated_routed == 0``) while
-    # SOME issuers were excluded as metadata_required and/or confirmed_data_gap
-    # is NOT a vacuous PASS — there is no green evidence anywhere, only
-    # exclusions. The coverage ratio above is computed on a denominator that
-    # OMITS confirmed_data_gap, so a universe that is 100% confirmed_data_gap
-    # has coverage_ratio == 0.0 and would slip through as GREEN. Force a
-    # structural FAIL so a routed-but-fully-unanchored universe can never be
-    # GREEN.
+    # Zero-anchored-universe structural guard (safety review #1 + #2). A routed
+    # universe that anchored ZERO issuers (``evaluated_routed == 0``) while ANY
+    # issuer was excluded (ANY bucket non-empty) is NOT a vacuous PASS — there
+    # is no green SEC evidence anywhere, only exclusions. The coverage ratio
+    # above is computed on a denominator that OMITS confirmed_data_gap (and the
+    # other buckets), so a universe that is 100% confirmed_data_gap — or 100%
+    # excluded_non_filer, or 100% excluded_pre_horizon — has coverage_ratio ==
+    # 0.0 and would slip through as GREEN. Sum ALL exclusion buckets so a
+    # routed-but-fully-unanchored universe can NEVER be GREEN regardless of
+    # which bucket the exclusions landed in.
+    excluded_total = (
+        excluded_metadata_required
+        + excluded_confirmed_data_gap
+        + excluded_non_filer
+        + excluded_dark
+        + excluded_lifecycle_terminated
+        + excluded_other_form
+        + excluded_pre_horizon
+    )
     zero_anchored_with_exclusions = (
-        evaluated_routed == 0
-        and (excluded_metadata_required + excluded_confirmed_data_gap) > 0
+        evaluated_routed == 0 and excluded_total > 0
     )
 
     return _Evaluation(
@@ -759,6 +843,9 @@ async def _evaluate(pool: asyncpg.Pool) -> _Evaluation:
             excluded_confirmed_data_gap_evidenced
         ),
         excluded_non_filer=excluded_non_filer,
+        non_operating_anchored_contradiction=(
+            non_operating_anchored_contradiction
+        ),
         excluded_pre_horizon=excluded_pre_horizon,
         by_form=by_form,
         gaps=gaps,
@@ -803,7 +890,13 @@ async def check_fundamentals_quarterly_completeness(
     # fundamental "no green evidence anywhere" condition.
     if ev.zero_anchored_with_exclusions:
         excluded_total = (
-            ev.excluded_metadata_required + ev.excluded_confirmed_data_gap
+            ev.excluded_metadata_required
+            + ev.excluded_confirmed_data_gap
+            + ev.excluded_non_filer
+            + ev.excluded_dark
+            + ev.excluded_lifecycle_terminated
+            + ev.excluded_other_form
+            + ev.excluded_pre_horizon
         )
         failures.append(FailureDetail(
             ticker=_ZERO_ANCHORED_SENTINEL_TICKER,
@@ -816,7 +909,12 @@ async def check_fundamentals_quarterly_completeness(
                 f"zero anchored issuers in the routed universe while "
                 f"{excluded_total} were excluded "
                 f"(metadata_required={ev.excluded_metadata_required}, "
-                f"confirmed_data_gap={ev.excluded_confirmed_data_gap}) — "
+                f"confirmed_data_gap={ev.excluded_confirmed_data_gap}, "
+                f"non_filer={ev.excluded_non_filer}, "
+                f"dark={ev.excluded_dark}, "
+                f"lifecycle_terminated={ev.excluded_lifecycle_terminated}, "
+                f"other_form={ev.excluded_other_form}, "
+                f"pre_horizon={ev.excluded_pre_horizon}) — "
                 f"no green SEC evidence anywhere; extend the SEC "
                 f"periodic-filings backfill before trusting this gate"
             ),
@@ -891,6 +989,9 @@ async def check_fundamentals_quarterly_completeness(
                 ev.excluded_confirmed_data_gap_evidenced
             ),
             excluded_non_filer=ev.excluded_non_filer,
+            non_operating_anchored_contradiction=(
+                ev.non_operating_anchored_contradiction
+            ),
             excluded_pre_horizon=ev.excluded_pre_horizon,
             horizon=_resolve_horizon().isoformat(),
             excluded_other_form=ev.excluded_other_form,
@@ -911,6 +1012,9 @@ async def check_fundamentals_quarterly_completeness(
                 ev.excluded_confirmed_data_gap_evidenced
             ),
             excluded_non_filer=ev.excluded_non_filer,
+            non_operating_anchored_contradiction=(
+                ev.non_operating_anchored_contradiction
+            ),
             excluded_pre_horizon=ev.excluded_pre_horizon,
             horizon=_resolve_horizon().isoformat(),
             excluded_other_form=ev.excluded_other_form,

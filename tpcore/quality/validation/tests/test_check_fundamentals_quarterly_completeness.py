@@ -882,8 +882,11 @@ def test_horizon_default_and_bad_env_falls_back() -> None:
     try:
         os.environ["STE_FUNDAMENTALS_HORIZON"] = "not-a-date"
         assert _resolve_horizon() == _DEFAULT
-        os.environ["STE_FUNDAMENTALS_HORIZON"] = "2018-07-01"
-        assert _resolve_horizon() == date(2018, 7, 1)
+        # A BACKWARD (earlier-than-default) override widens the gate and is
+        # honoured. (A forward override is rejected — see
+        # test_resolve_horizon_rejects_forward_override_keeps_default.)
+        os.environ["STE_FUNDAMENTALS_HORIZON"] = "2012-07-01"
+        assert _resolve_horizon() == date(2012, 7, 1)
     finally:
         if old is None:
             os.environ.pop("STE_FUNDAMENTALS_HORIZON", None)
@@ -1045,3 +1048,212 @@ async def test_non_operating_routing_precedes_cik_classification() -> None:
     assert ev.excluded_non_filer == 2
     assert ev.excluded_metadata_required == 0
     assert ev.excluded_confirmed_data_gap == 0
+
+
+# ── FAKE-GREEN FIX #1 — non_filer exclusion must be ANCHORED-gated ────
+#
+# An anchored=True issuer whose asset_class label is non-operating (etf /
+# etn / fund) is a misclassified OPERATING filer (asset_class is
+# OpenFIGI-derived, NOT authoritative). It MUST be evaluated for gaps — the
+# pre-fix code short-circuited it to excluded_non_filer in Pass 1, masking a
+# real ≥2016 gap before evidence was consulted. These tests FAIL pre-fix
+# (the ticker is excluded, no failure, no contradiction counter) and PASS
+# post-fix.
+
+
+async def test_anchored_etf_with_post_horizon_gap_FAILS_not_non_filer() -> None:
+    """A misclassified OPERATING filer (asset_class='etf' but anchored=True
+    with real 10-Q filings AND a real ≥2016 missing reportDate) must FAIL on
+    that ticker — NOT be masked as excluded_non_filer — and the
+    ``non_operating_anchored_contradiction`` counter must increment."""
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _evaluate,
+    )
+    rd = _quarter_ends(_TODAY - timedelta(days=400), 4)
+    rd = [d for d in rd if d <= _TODAY]
+    missing = rd[1]  # SEC filed it; fundamentals lacks it; ≥2016
+    have = [d for d in rd if d != missing]
+    # asset_class wrongly 'etf', but it FILES 10-Qs (anchored=True via
+    # sec_report_dates) — an identity contradiction that must SURFACE.
+    iss = _Issuer(
+        "FAKEETF", cid="c-fakeetf", cik="0000320193", primary="10-Q",
+        sec_report_dates=rd, have=have, asset_class="etf",
+    )
+    pool = _Pool([iss])
+    ev = await _evaluate(pool)
+    # The contradiction is COUNTED (operator-visible), not masked.
+    assert ev.non_operating_anchored_contradiction == 1
+    # It was evaluated normally (in the denominator), NOT non_filer.
+    assert ev.excluded_non_filer == 0
+    assert ev.evaluated_routed == 1
+    result = await check_fundamentals_quarterly_completeness(pool)
+    assert result.passed is False
+    fake = [f for f in result.failures if f.ticker == "FAKEETF"]
+    assert len(fake) == 1
+    assert fake[0].reason == "missing_period_10-Q"
+    assert missing.isoformat() in fake[0].observed
+
+
+async def test_anchored_false_etf_still_excluded_non_filer_unchanged() -> None:
+    """REGRESSION KEEPER: an anchored=False ETF (no real filings) still
+    routes to excluded_non_filer — the anchored-gate only changes the
+    anchored=True contradiction case, not the genuine non-filer case."""
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _evaluate,
+    )
+    iss = _Issuer(
+        "REALETF", cid="c-realetf", cik="0000999000", primary="10-Q",
+        sec_report_dates=[], have=[], asset_class="etf",  # anchored=False
+    )
+    ev = await _evaluate(_Pool([iss, *_clean_padding(2)]))
+    assert ev.excluded_non_filer == 1
+    assert ev.non_operating_anchored_contradiction == 0
+    assert ev.excluded_metadata_required == 0
+
+
+# ── FAKE-GREEN FIX #2 — zero-anchored guard counts ALL exclusions ────
+#
+# A universe whose only routed entities are all excluded_non_filer
+# (evaluated_routed==0, NO anchored green evidence) read GREEN pre-fix
+# because the guard only summed metadata_required + confirmed_data_gap.
+# Post-fix the guard sums ALL exclusion buckets → structural FAIL.
+
+
+async def test_zero_anchored_all_non_filer_fails() -> None:
+    """A universe that is ENTIRELY excluded_non_filer (every routed issuer is
+    an anchored=False ETF) has zero anchored green evidence and MUST FAIL the
+    zero-anchored structural guard. Pre-fix this read GREEN (non_filer was
+    omitted from the guard's sum)."""
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _evaluate,
+    )
+    etfs = [
+        _Issuer(
+            f"ONLYETF{i}", cid=f"c-onlyetf-{i}", cik=f"00{i:05d}",
+            primary="10-Q", sec_report_dates=[], have=[], asset_class="etf",
+        )
+        for i in range(3)
+    ]
+    pool = _Pool(etfs)
+    ev = await _evaluate(pool)
+    assert ev.evaluated_routed == 0
+    assert ev.excluded_non_filer == 3
+    assert ev.zero_anchored_with_exclusions is True
+    result = await check_fundamentals_quarterly_completeness(pool)
+    assert result.passed is False, [f.observed for f in result.failures]
+    sentinel = [
+        f for f in result.failures if f.reason == "zero_anchored_universe"
+    ]
+    assert len(sentinel) == 1
+    assert "non_filer=3" in sentinel[0].observed
+
+
+async def test_zero_anchored_guard_sums_pre_horizon_bucket() -> None:
+    """The zero-anchored guard's exclusion sum INCLUDES excluded_pre_horizon
+    (and every other bucket). Because pre_horizon can only accrue on an
+    anchored=True issuer (which lands in evaluated_routed) the all-pre_horizon
+    zero-anchored case is unreachable via real data — so this test injects a
+    constructed _Evaluation with ONLY excluded_pre_horizon set and asserts the
+    check function still FAILs on the structural guard. Pre-fix the guard
+    summed only metadata_required + confirmed_data_gap, so a pre_horizon-only
+    flag would not have produced the sentinel."""
+    from unittest.mock import patch
+
+    from tpcore.quality.validation.checks import (
+        fundamentals_quarterly_completeness as mod,
+    )
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _Evaluation,
+    )
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        check_fundamentals_quarterly_completeness as _check,
+    )
+
+    ev = _Evaluation(
+        sentinel=None,
+        evaluated_routed=0,
+        excluded_dark=0,
+        excluded_metadata_required=0,
+        excluded_confirmed_data_gap=0,
+        excluded_other_form=0,
+        excluded_pre_horizon=2,
+        zero_anchored_with_exclusions=True,
+    )
+
+    async def _fake_eval(_pool: Any) -> Any:
+        return ev
+
+    with patch.object(mod, "_evaluate", _fake_eval):
+        result = await _check(_Pool([]))
+    assert result.passed is False
+    sentinel = [
+        f for f in result.failures if f.reason == "zero_anchored_universe"
+    ]
+    assert len(sentinel) == 1
+    assert "pre_horizon=2" in sentinel[0].observed
+
+
+# ── FAKE-GREEN FIX #3 — horizon override may only WIDEN, never narrow ─
+#
+# A forward (later-than-default) STE_FUNDAMENTALS_HORIZON silently shrank the
+# failing set pre-fix. Post-fix a later override is REJECTED (ignored, warned)
+# and the default is used; an earlier override still WIDENS (honoured).
+
+
+async def test_forward_horizon_override_rejected_does_not_shrink_failing_set() -> None:
+    """STE_FUNDAMENTALS_HORIZON set FORWARD (later than the 2016 default) is
+    IGNORED — the horizon stays at the default, so a 2018 gap that the default
+    catches STILL FAILS. Pre-fix the forward override would have moved the
+    horizon to 2025 and silently dropped the 2018 gap (fake green)."""
+    import os
+
+    pre_default_safe = date(2018, 3, 31)  # ≥ default(2016), < forward override
+    recent = _TODAY - timedelta(days=30)
+    iss = _Issuer(
+        "FWDCO", cid="c-fwdco", cik="0000320193", primary="10-Q",
+        sec_report_dates=[pre_default_safe, recent], have=[recent],
+        asset_class="stock",
+    )
+    old = os.environ.get("STE_FUNDAMENTALS_HORIZON")
+    try:
+        os.environ["STE_FUNDAMENTALS_HORIZON"] = "2025-01-01"  # FORWARD
+        result = await check_fundamentals_quarterly_completeness(_Pool([iss]))
+        # The 2018 gap is still in scope (override rejected) → FAIL.
+        assert result.passed is False, [f.observed for f in result.failures]
+        fwd = [f for f in result.failures if f.ticker == "FWDCO"]
+        assert len(fwd) == 1
+        assert pre_default_safe.isoformat() in fwd[0].observed
+    finally:
+        if old is None:
+            os.environ.pop("STE_FUNDAMENTALS_HORIZON", None)
+        else:
+            os.environ["STE_FUNDAMENTALS_HORIZON"] = old
+
+
+def test_resolve_horizon_rejects_forward_override_keeps_default() -> None:
+    """``_resolve_horizon`` returns the DEFAULT (not the override) when the
+    override is later than the default (narrowing is forbidden); a backward
+    override is honoured (widening is safe)."""
+    import os
+
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        FUNDAMENTALS_COMPLETENESS_HORIZON_DEFAULT as _DEFAULT,
+    )
+    from tpcore.quality.validation.checks.fundamentals_quarterly_completeness import (
+        _resolve_horizon,
+    )
+    old = os.environ.get("STE_FUNDAMENTALS_HORIZON")
+    try:
+        # Forward (narrowing) → REJECTED, default used.
+        os.environ["STE_FUNDAMENTALS_HORIZON"] = "2025-01-01"
+        assert _resolve_horizon() == _DEFAULT
+        os.environ["STE_FUNDAMENTALS_HORIZON"] = "2020-06-30"
+        assert _resolve_horizon() == _DEFAULT
+        # Backward (widening) → honoured.
+        os.environ["STE_FUNDAMENTALS_HORIZON"] = "2010-01-01"
+        assert _resolve_horizon() == date(2010, 1, 1)
+    finally:
+        if old is None:
+            os.environ.pop("STE_FUNDAMENTALS_HORIZON", None)
+        else:
+            os.environ["STE_FUNDAMENTALS_HORIZON"] = old
