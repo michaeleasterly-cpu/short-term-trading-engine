@@ -85,6 +85,58 @@ export interface MarketHealth {
     state: "narrow" | "broad" | "mixed";
     note: string;
   };
+  liquidity: Liquidity;
+}
+
+// ── Liquidity & positioning (Part 1: self-fetching, NO DB) ─────────────────
+// Six gauges that sit between Breadth and Recession watch. Every value is
+// fetched live (FRED + the quote feed) at render time — there is NO database
+// read or write in this layer (Part 2, persisting to the macro table, is
+// explicitly backlogged). NEVER fabricate: when a source can't be fetched, the
+// gauge carries an `unavailable`/`not_wired` flag and the page renders a flag,
+// not a number.
+export interface NetLiquidity {
+  usd_bn: number;          // (WALCL/1000) − WTREGEN − RRPONTSYD, all $bn
+  change_13wk_bn: number | null;  // 13-week change in $bn (null if too little history)
+  as_of: string;           // oldest of the 3 component observation dates
+}
+// MOVE is a DISPLAY-ONLY proxy (TLT 21-day realized vol, %). No free authoritative
+// ICE MOVE source exists on this tier — see docs/references/market-data-sources-
+// alternates.md §1. This is a realized-vol proxy in PERCENT, NOT the implied-vol
+// MOVE index in basis points — it is CLEARLY labeled and is NOT fed into the
+// composite (a realized-vol proxy is not the implied-vol stress signal).
+export interface MoveIndex {
+  proxy_value: number | null;  // TLT 21d annualized realized vol, % (null ⇒ unavailable)
+  as_of: string | null;        // latest TLT EOD date the proxy was computed from
+  available: boolean;
+}
+export interface Vvix {
+  value: number | null;    // VVIX level from CBOE CDN (null ⇒ unavailable)
+  as_of: string | null;    // the CSV's latest date (MM/DD/YYYY → ISO)
+  available: boolean;
+}
+export interface IndexConcentration {
+  pct: number;             // top-10 holdings % of S&P 500 (SSGA Weight column sum)
+  as_of: string;           // SSGA file's holdings date
+  is_proxy: boolean;       // false ⇒ real SSGA holdings; true ⇒ Mag-7 quote-feed fallback
+  source: string;          // human label of where the number came from
+}
+export interface PassiveFlows {
+  wired: false;            // Part 1 has no clean machine-readable source + no DB
+  note: string;
+}
+export interface PrivateCreditNote {
+  proxy_pct: number | null;   // optional public BDC discount-to-NAV, "rough proxy"
+  proxy_label: string | null;
+  note: string;
+}
+export interface Liquidity {
+  net_liquidity: NetLiquidity | null;
+  move: MoveIndex;
+  vvix: Vvix;
+  concentration: IndexConcentration | null;
+  passive_flows: PassiveFlows;
+  private_credit: PrivateCreditNote;
 }
 
 // ── low-level fetchers ────────────────────────────────────────────────────
@@ -154,12 +206,149 @@ async function fetchText(url: string): Promise<string> {
   return res.ok ? res.text() : "";
 }
 
+// FMP quote incl. market cap — for the Mag-7 concentration PROXY only. Same feed
+// as the VIX/S&P quotes; reuses rfetch. Returns null on any failure (no fabricate).
+interface FmpQuoteCap { price: number; marketCap?: number; }
+async function fmpMarketCap(symbol: string): Promise<number | null> {
+  const url = `https://financialmodelingprep.com/stable/quote?symbol=${encodeURIComponent(symbol)}&apikey=${FMP_KEY}`;
+  const res = await rfetch(url, { next: { revalidate: DAY } });
+  if (!res.ok) return null;
+  const j = (await res.json()) as FmpQuoteCap[];
+  const cap = Array.isArray(j) && j.length ? j[0]?.marketCap : null;
+  return typeof cap === "number" && cap > 0 ? cap : null;
+}
+
+// VVIX — CBOE's authoritative daily-EOD CSV (free, no key). Two columns:
+// DATE (MM/DD/YYYY), VVIX (close). Full history back to 2006; we only need the
+// last row. Validated 2026-06-08 (VVIX = 92.40). Returns the latest [iso, value]
+// or null on any fetch/parse failure (never fabricate). Reuses rfetch.
+//   Source: docs/references/market-data-sources-alternates.md §2.
+async function fetchCboeVvix(): Promise<Obs | null> {
+  const csv = await fetchText(
+    "https://cdn.cboe.com/api/global/us_indices/daily_prices/VVIX_History.csv",
+  );
+  if (!csv) return null;
+  const lines = csv.trim().split(/\r?\n/);
+  // Walk from the bottom for the last parseable "MM/DD/YYYY,<number>" row.
+  for (let i = lines.length - 1; i >= 1; i--) {
+    const parts = lines[i].split(",");
+    if (parts.length < 2) continue;
+    const m = parts[0].trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    const val = Number(parts[1]);
+    if (m && Number.isFinite(val) && val > 0) {
+      const iso = `${m[3]}-${m[1]}-${m[2]}`; // MM/DD/YYYY → YYYY-MM-DD
+      return [iso, Math.round(val * 100) / 100];
+    }
+  }
+  return null;
+}
+
+// Index concentration — top-10 holdings % of S&P 500. Primary source: the SSGA
+// SPY holdings xlsx, which carries a pre-computed `Weight` column (% units) — one
+// HTTP call, no key, browser UA + redirect-follow (the published URL 301s to a
+// no-locale path; native fetch follows redirects). Validated 2026-06-08:
+// top-10 = 37.96%, holdings "As of 05-Jun-2026". Returns { pct, as_of } or null
+// on any parse failure → orchestrator falls back to the labeled Mag-7 proxy.
+//   Source: docs/references/market-data-sources-alternates.md §3.
+// NB: find the header row where col 0 == "Name" rather than hard-coding an
+// offset (SSGA occasionally shifts the metadata preamble).
+async function fetchSsgaTop10(): Promise<{ pct: number; as_of: string } | null> {
+  const wb = await fetchXls(
+    "https://www.ssga.com/us/en/intermediary/library-content/products/fund-data/etfs/us/holdings-daily-us-en-spy.xlsx",
+  );
+  if (!wb) return null;
+  try {
+    const sh = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json<(string | number)[]>(sh, { header: 1 });
+    // Holdings date lives in a metadata preamble row like ["Holdings:", "As of 05-Jun-2026"].
+    let as_of = "";
+    let headerIdx = -1;
+    for (let i = 0; i < Math.min(rows.length, 20); i++) {
+      const r = rows[i];
+      if (!r) continue;
+      if (headerIdx === -1 && String(r[0]).trim() === "Name") { headerIdx = i; break; }
+      const joined = r.map((c) => String(c)).join(" ");
+      const dm = joined.match(/As of\s+(\d{2})-([A-Za-z]{3})-(\d{4})/);
+      if (dm) {
+        const months: Record<string, string> = {
+          Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
+          Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12",
+        };
+        const mo = months[dm[2]];
+        if (mo) as_of = `${dm[3]}-${mo}-${dm[1]}`; // DD-Mon-YYYY → YYYY-MM-DD
+      }
+    }
+    if (headerIdx === -1) return null;
+    const hdr = (rows[headerIdx] as (string | number)[]).map((c) => String(c).trim());
+    const wi = hdr.indexOf("Weight");
+    const ni = hdr.indexOf("Name");
+    if (wi === -1 || ni === -1) return null;
+    const weights: number[] = [];
+    for (let i = headerIdx + 1; i < rows.length; i++) {
+      const r = rows[i];
+      const name = r?.[ni];
+      if (name == null || String(name).trim() === "") break; // data ends at first blank Name
+      const w = Number(r[wi]);
+      if (Number.isFinite(w) && w > 0) weights.push(w);
+    }
+    if (weights.length < 10) return null;
+    // Already weight-sorted desc in the SSGA file; sort defensively then take top-10.
+    weights.sort((a, b) => b - a);
+    const top10 = weights.slice(0, 10).reduce((s, w) => s + w, 0);
+    // Sanity: a plausible top-10 concentration is ~25-45%. Reject implausible sums.
+    if (!(top10 > 15 && top10 < 60)) return null;
+    return { pct: Math.round(top10 * 100) / 100, as_of: as_of || new Date().toISOString().slice(0, 10) };
+  } catch {
+    return null;
+  }
+}
+
+// MOVE proxy — TLT 21-day annualized realized volatility (%), computed from FMP
+// daily EOD closes (the same path the engines use). DISPLAY-ONLY and clearly
+// labeled — this is a realized-vol proxy in percent, NOT the implied-vol ICE MOVE
+// index in basis points. It is NOT fed into the composite. Returns { value, as_of }
+// or null. Source: docs/references/market-data-sources-alternates.md §1.
+//   ann_vol = stdev(log daily returns over last 21 closes) × √252 × 100
+async function fetchTltMoveProxy(): Promise<{ value: number; as_of: string } | null> {
+  const obs = await fmpHistoryDated("TLT", 30);
+  if (obs.length < 22) return null;
+  const closes = obs.map((o) => o[1]).slice(-22); // 22 closes → 21 returns
+  const rets: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    if (closes[i - 1] > 0 && closes[i] > 0) rets.push(Math.log(closes[i] / closes[i - 1]));
+  }
+  if (rets.length < 2) return null;
+  const m = mean(rets);
+  const variance = rets.reduce((s, x) => s + (x - m) ** 2, 0) / (rets.length - 1); // sample stdev
+  const annVol = Math.sqrt(variance) * Math.sqrt(252) * 100;
+  if (!Number.isFinite(annVol) || annVol <= 0) return null;
+  return { value: Math.round(annVol * 10) / 10, as_of: obs[obs.length - 1][0] };
+}
+
 // Excel serial date → ISO (Excel epoch base 1899-12-30 to absorb the 1900 leap bug).
 function xlDate(serial: number): string {
   return new Date(Date.UTC(1899, 11, 30) + serial * 86400000).toISOString().slice(0, 10);
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
+// Piecewise-linear interpolation across (input → risk) anchor points, clamped
+// 0-100. Mirror of the page-side `interp` (kept local so the composite-input
+// risk maps below are exported + unit-testable without importing the page).
+export function interp(x: number, anchors: Array<[number, number]>): number {
+  const asc = anchors[0][0] < anchors[anchors.length - 1][0];
+  const pts = asc ? anchors : [...anchors].reverse();
+  if (x <= pts[0][0]) return Math.max(0, Math.min(100, pts[0][1]));
+  if (x >= pts[pts.length - 1][0]) return Math.max(0, Math.min(100, pts[pts.length - 1][1]));
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [x0, y0] = pts[i];
+    const [x1, y1] = pts[i + 1];
+    if (x >= x0 && x <= x1) {
+      const f = x1 === x0 ? 0 : (x - x0) / (x1 - x0);
+      return Math.max(0, Math.min(100, y0 + f * (y1 - y0)));
+    }
+  }
+  return 50;
+}
 const mean = (a: number[]) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
 const ma = (a: number[], n: number) => mean(a.slice(-Math.min(n, a.length)));
 const clamp = (x: number) => Math.max(0, Math.min(100, x));
@@ -179,6 +368,51 @@ function ind(obs: Obs[], n: number, window: string): Indicator | null {
   if (!obs.length) return null;
   const [date, value] = obs[obs.length - 1];
   return { value, date, trend: trend(obs, n, window) };
+}
+
+// ── Net liquidity (Fed balance sheet − TGA − RRP), unit-asserted ───────────
+// CRITICAL: we ASSERT the FRED-reported units rather than assume them. Verified
+// against FRED series metadata (2026-06-08):
+//   WALCL     — "Millions of U.S. Dollars"  → ÷1000 to billions
+//   WTREGEN   — "Millions of U.S. Dollars"  → ÷1000 to billions  (NOT billions!)
+//   RRPONTSYD — "Billions of US Dollars"    → already billions
+// (An earlier spec note had WTREGEN in billions; FRED reports it in MILLIONS,
+//  which is exactly why "assert, don't assume" — getting this wrong yields a
+//  nonsensical −$869,000bn instead of ~+$5,800bn.)
+// Exported pure so the unit-normalization test pins the millions→billions step.
+//   net_liquidity_usd_bn = (WALCL/1000) − (WTREGEN/1000) − RRPONTSYD
+export function netLiquidityUsdBn(
+  walclMillions: number,
+  wtregenMillions: number,
+  rrpBillions: number,
+): number {
+  return walclMillions / 1000 - wtregenMillions / 1000 - rrpBillions;
+}
+
+// MOVE band thresholds (bond-market implied vol): <80 calm / 80-120 watch / >120
+// stressed. Retained for reference/back-compat (the real ICE MOVE is unavailable
+// on this tier; what we display is a TLT realized-vol PROXY that is NOT banded as
+// MOVE and NOT fed into the composite — see fetchTltMoveProxy).
+export function moveBand(value: number): "calm" | "watch" | "stressed" {
+  return value < 80 ? "calm" : value <= 120 ? "watch" : "stressed";
+}
+
+// ── Composite Timing-block risk maps (JUDGMENT-CALIBRATED HEURISTICS) ─────────
+// These interpolation bands are author-chosen, calibrated against observed
+// historical ranges — they are NOT literature-derived. See
+// docs/references/market-composite-references.md §3.3 (VVIX) which validates the
+// 80/100/120/150 ladder as "sensible-but-judgment-call, NOT literature-backed".
+// Centralized + exported so the timing-block test references the same anchors.
+//
+// VVIX → risk: long-run avg ≈ 85-90; <80 complacent, sustained >120 elevated
+// fear/dislocation, ~150 near observed extremes.
+export function vvixRiskFromLevel(vvix: number): number {
+  return interp(vvix, [[80, 0], [100, 40], [120, 70], [150, 100]]);
+}
+// top-10 concentration % → breadth risk: 20% ≈ historically normal, 30% ≈
+// elevated, 40% ≈ extreme top-heaviness (record ~37-40% in 2024-25).
+export function concRiskFromTop10(top10Pct: number): number {
+  return interp(top10Pct, [[20, 0], [30, 50], [40, 100]]);
 }
 
 // ── orchestrator ────────────────────────────────────────────────────────
@@ -203,8 +437,13 @@ export async function getMarketHealth(): Promise<MarketHealth> {
     ["industrial_production", "INDPRO", 3, "3mo"],       // level-only (bear-score input)
   ];
 
+  // Mag-7 — the Magnificent Seven; concentration PROXY constituents (labeled).
+  const MAG7 = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA"];
+
   const [
     fredResults, vixQ, vixHistD, spxHistD, gspcH, rspH, aaiiWb, capeText, gdpObs, equitiesObs,
+    // ── liquidity & positioning (Part 1, self-fetching, NO DB) ──
+    walclObs, wtregenObs, rrpObs, moveProxy, vvixObs, ssgaTop10, mag7Caps, spxTotalCap,
   ] = await Promise.all([
     Promise.all(FRED.map(([, id]) => fredSeries(id))),
     fmpQuote("^VIX"),
@@ -216,6 +455,15 @@ export async function getMarketHealth(): Promise<MarketHealth> {
     fetchText("https://www.multpl.com/shiller-pe"),  // CAPE — robust daily current value
     fredSeries("GDP", 1500),
     fredSeries("NCBEILQ027S", 1500),  // Fed Z.1 corporate-equities market value (Buffett numerator)
+    // Net liquidity components — assert units at fetch (see netLiquidityUsdBn):
+    fredSeries("WALCL", 200),       // Fed total assets — $MILLIONS (weekly)
+    fredSeries("WTREGEN", 200),     // Treasury General Account — $MILLIONS (daily) [FRED-verified, NOT billions]
+    fredSeries("RRPONTSYD", 200),   // Overnight reverse repo — $BILLIONS (daily)
+    fetchTltMoveProxy(),            // MOVE display-only PROXY: TLT 21d realized vol via FMP EOD
+    fetchCboeVvix(),                // VVIX: CBOE authoritative daily-EOD CSV (free, no key)
+    fetchSsgaTop10(),               // index concentration: SSGA SPY holdings xlsx (pre-computed Weight col)
+    Promise.all(MAG7.map((s) => fmpMarketCap(s))),  // proxy numerator (Mag-7 caps) — concentration FALLBACK only
+    fmpMarketCap("^GSPC"),          // proxy denominator: S&P 500 total mkt cap (0 on this feed → proxy unavailable, NOT fabricated)
   ]);
 
   const indicators: Record<string, Indicator> = {};
@@ -332,6 +580,97 @@ export async function getMarketHealth(): Promise<MarketHealth> {
     breakdown: { sahm_rule: bsSahm, industrial_production: bsIp, initial_claims: bsClaims, yield_curve: bsYield, credit_spread: bsCredit, vix: bsVix },
   };
 
+  // ── Liquidity & positioning (Part 1: self-fetching, NO DB) ──────────────
+  // 1. net_liquidity = (WALCL/1000) − (WTREGEN/1000) − RRPONTSYD, units asserted.
+  //    FRED-verified units (NOT assumed): WALCL $MILLIONS, WTREGEN $MILLIONS,
+  //    RRPONTSYD $BILLIONS. netLiquidityUsdBn normalizes WALCL + WTREGEN
+  //    millions→billions FIRST. as_of = oldest of the 3 dates so the card never
+  //    overstates freshness (FRED series publish on different lags).
+  let net_liquidity: NetLiquidity | null = null;
+  if (walclObs.length && wtregenObs.length && rrpObs.length) {
+    const w = walclObs[walclObs.length - 1];       // [date, $millions]
+    const tg = wtregenObs[wtregenObs.length - 1];  // [date, $millions]
+    const rr = rrpObs[rrpObs.length - 1];          // [date, $billions]
+    const usd_bn = netLiquidityUsdBn(w[1], tg[1], rr[1]);
+    // 13-week change: build a weekly net-liquidity series by aligning each
+    // WALCL weekly obs to the nearest-prior TGA + RRP obs, then diff vs ~13wk ago.
+    const nlSeries: Obs[] = walclObs.map((wo) => {
+      const prior = (arr: Obs[]): number | null => {
+        let v: number | null = null;
+        for (const o of arr) { if (o[0] <= wo[0]) v = o[1]; else break; }
+        return v;
+      };
+      const tgv = prior(wtregenObs);
+      const rrv = prior(rrpObs);
+      return tgv != null && rrv != null
+        ? [wo[0], netLiquidityUsdBn(wo[1], tgv, rrv)] as Obs
+        : [wo[0], NaN] as Obs;
+    }).filter((o) => !Number.isNaN(o[1]));
+    let change_13wk_bn: number | null = null;
+    if (nlSeries.length > 13) {
+      const k = Math.min(13, nlSeries.length - 1);
+      change_13wk_bn = Math.round((nlSeries[nlSeries.length - 1][1] - nlSeries[nlSeries.length - 1 - k][1]) * 10) / 10;
+    }
+    const as_of = [w[0], tg[0], rr[0]].sort()[0]; // oldest (lexicographic ISO = chronological)
+    net_liquidity = { usd_bn: Math.round(usd_bn * 10) / 10, change_13wk_bn, as_of };
+  }
+
+  // 2. move_index — DISPLAY-ONLY PROXY: TLT 21-day annualized realized vol (%),
+  //    from FMP EOD closes. No free authoritative ICE MOVE source exists on this
+  //    tier (docs/references/market-data-sources-alternates.md §1). This is a
+  //    realized-vol proxy in PERCENT, NOT the implied-vol MOVE index in basis
+  //    points — clearly labeled, and NOT fed into the composite. Null on any
+  //    fetch/parse failure → card flags unavailable, never fabricated.
+  const move: MoveIndex = moveProxy
+    ? { proxy_value: moveProxy.value, as_of: moveProxy.as_of, available: true }
+    : { proxy_value: null, as_of: null, available: false };
+
+  // 3. vvix — CBOE authoritative daily-EOD CSV (free, no key). Companion to VIX.
+  //    Latest [iso, close] or null → flag unavailable rather than fabricate.
+  const vvix: Vvix = vvixObs
+    ? { value: vvixObs[1], as_of: vvixObs[0], available: true }
+    : { value: null, as_of: null, available: false };
+
+  // 4. index_concentration — top-10 % of S&P 500. Primary: SSGA SPY holdings xlsx
+  //    (pre-computed Weight column, one call, no key). FALLBACK (only if SSGA is
+  //    unreachable): a clearly-labeled Mag-7 quote-feed proxy (Σ Mag-7 caps ÷
+  //    S&P 500 total cap). The quote feed reports marketCap=0 for ^GSPC, so when
+  //    no real total cap is available the proxy is UNAVAILABLE rather than
+  //    fabricated — the card then flags "unavailable", never a fake number.
+  let concentration: IndexConcentration | null = null;
+  if (ssgaTop10 != null) {
+    concentration = { pct: ssgaTop10.pct, as_of: ssgaTop10.as_of, is_proxy: false, source: "SSGA SPY holdings (top-10 Weight column)" };
+  } else {
+    const caps = (mag7Caps as Array<number | null>).filter((c): c is number => c != null && c > 0);
+    const mag7Sum = caps.reduce((s, c) => s + c, 0);
+    if (caps.length === MAG7.length && spxTotalCap != null && spxTotalCap > mag7Sum) {
+      const pct = (mag7Sum / spxTotalCap) * 100;
+      concentration = { pct: Math.round(pct * 10) / 10, as_of: new Date().toISOString().slice(0, 10), is_proxy: true, source: "Mag-7 ÷ S&P 500 total cap (quote-feed proxy)" };
+    }
+    // else: no reliable source → concentration stays null → card flags unavailable.
+  }
+
+  // 5. passive_flows_4wk — ICI weekly equity fund+ETF flows. No clean machine-
+  //    readable source in Part 1 and NO DB → scaffold the card with an honest
+  //    "not yet wired" flag. NEVER fabricate a number.
+  const passive_flows: PassiveFlows = {
+    wired: false,
+    note: "ICI weekly fund-flow data has no clean machine-readable feed; persisting it is Part 2 (backlogged). Not yet wired.",
+  };
+
+  // 6. private_credit_note — informational CAVEAT only (a structural blind spot:
+  //    risk has migrated into private credit that doesn't mark-to-market daily).
+  //    Not a live gauge. No live proxy fetched in Part 1 → proxy stays null.
+  const private_credit: PrivateCreditNote = {
+    proxy_pct: null,
+    proxy_label: null,
+    note: "Caveat, not a gauge: a growing share of corporate-credit risk now sits in private credit and direct-lending funds that don't mark-to-market daily, so it doesn't show up in the public spread series above. Treat the credit gauges as a partial view.",
+  };
+
+  const liquidity: Liquidity = {
+    net_liquidity, move, vvix, concentration, passive_flows, private_credit,
+  };
+
   // ── summary regime ──────────────────────────────────────────────────────
   const vix = g("vix");
   const vol_regime = vix == null ? "unknown" : vix < 15 ? "calm" : vix < 20 ? "normal" : vix < 30 ? "stress" : "crisis";
@@ -355,5 +694,6 @@ export async function getMarketHealth(): Promise<MarketHealth> {
       note: "CAPE + Buffett both gauge how expensive stocks are (not when anything happens). Both stretched is a stronger signal than either alone.",
     },
     breadth,
+    liquidity,
   };
 }
