@@ -136,10 +136,19 @@ def build_sec_extract() -> dict[str, dict]:
     reader = SECSubmissionsBulkReader(zip_path=SEC_ZIP, local_dir=Path("/nonexistent"))
     out: dict[str, dict] = {}
     n = 0
+    skipped_shards = 0
     for nm in bases:
         try:
             base = json.loads(zf.read(nm))
-        except Exception:  # noqa: BLE001 — skip a corrupt shard, surface count
+        except Exception as exc:  # noqa: BLE001 — skip a corrupt shard, surface count
+            # Finding #6: a corrupt/unreadable base JSON is no longer a silent
+            # skip — increment + log so a degraded bulk file surfaces in the run
+            # log instead of quietly shrinking the SEC universe.
+            skipped_shards += 1
+            logger.warning(
+                "sec_extract.shard_skipped", shard=nm, error=str(exc),
+                skipped_shards=skipped_shards,
+            )
             continue
         cik_int = int(nm[3:-5])
         cik = _padded(cik_int)
@@ -182,7 +191,10 @@ def build_sec_extract() -> dict[str, dict]:
             logger.info("sec_extract.progress", processed=n)
     zf.close()
     SEC_EXTRACT_CACHE.write_text(json.dumps(out))
-    logger.info("sec_extract.done", n_ciks=len(out), cache=str(SEC_EXTRACT_CACHE))
+    logger.info(
+        "sec_extract.done", n_ciks=len(out), skipped_shards=skipped_shards,
+        cache=str(SEC_EXTRACT_CACHE),
+    )
     return out
 
 

@@ -48,6 +48,7 @@ Create Date: 2026-06-08
 from __future__ import annotations
 
 from alembic import op
+from sqlalchemy import text
 
 revision = "20260608_0500"
 down_revision = "20260608_0400"
@@ -68,6 +69,33 @@ _TABLES: tuple[str, ...] = (
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    # Precondition guard (Finding #3): SET NOT NULL on a column that still holds
+    # NULLs aborts with Postgres's opaque "column contains null values" error
+    # naming neither the table nor the count. We pre-check each table and RAISE
+    # a named, actionable precondition instead — the operator sees exactly which
+    # table failed and how many rows must be window-resolved (or evidenced into
+    # platform.ingest_excluded_pre_existence) before this migration can apply.
+    offenders: list[str] = []
+    for tbl in _TABLES:
+        n = bind.execute(
+            text(
+                f"SELECT count(*) FROM platform.{tbl} "
+                f"WHERE classification_id IS NULL"
+            )
+        ).scalar_one()
+        if n:
+            offenders.append(f"platform.{tbl}={n}")
+    if offenders:
+        raise RuntimeError(
+            "20260608_0500 precondition FAILED — classification_id still NULL "
+            f"on: {', '.join(offenders)}. SET NOT NULL would abort. Resolve "
+            "each NULL-cls row (window-resolve via the SCD-2 BEFORE-INSERT "
+            "trigger / IdentityDispatcher, or evidence + remove genuine "
+            "pre-existence rows into platform.ingest_excluded_pre_existence) "
+            "before re-running this migration."
+        )
+
     for tbl in _TABLES:
         op.execute(
             f"ALTER TABLE platform.{tbl} "
