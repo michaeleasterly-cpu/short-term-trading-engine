@@ -8,7 +8,7 @@
  * Same data source: GET /api/public/market-health. No auth.
  */
 import { DashboardHead, Topbar, DashboardFooter, DEFAULT_FOOTER_COLUMNS } from "@/components/dashboard-chrome";
-import { getMarketHealth, type MarketHealth, type Dir } from "@/lib/market-data";
+import { getMarketHealth, vvixRiskFromLevel, concRiskFromTop10, type MarketHealth, type Dir } from "@/lib/market-data";
 
 // Self-fetching: data comes straight from FRED / FMP / AAII / Shiller (no DB,
 // no Railway console-api). Daily ISR; a Vercel cron revalidates at 00:00 ET.
@@ -361,6 +361,126 @@ function buildSections(d: MarketHealth): Section[] {
     detail: `Breadth measures participation, not price. Equal-weight S&P 500 (RSP) vs cap-weight S&P 500 (^GSPC): over the past year ${br.conc_1y >= 0 ? "+" : ""}${br.conc_1y}pp, last 20 days ${br.trend_20d >= 0 ? "+" : ""}${br.trend_20d}pp. A negative number means cap-weight (the mega-cap / AI names) is beating the average stock — a shrinking handful is carrying the index (narrow). The 1-year figure captures the structural concentration; the 20-day figure is the recent direction. This is the participation/timing read valuation cannot give. Companion gauges: % of stocks above their 200-day average, new highs minus new lows, the advance-decline line.`,
   };
 
+  // ── Liquidity & positioning (Part 1: self-fetching, NO DB) ──────────────
+  // Six gauges. Every value is fetched live; where a source can't be reached the
+  // card shows a flag/"unavailable" — NEVER a fabricated number.
+  const liq = d.liquidity;
+
+  // 1. Net liquidity — Fed balance sheet minus the TGA and reverse-repo drains.
+  const nl = liq?.net_liquidity ?? null;
+  const nlCard: Card | null = !nl ? null : (() => {
+    const t = nl.usd_bn / 1000; // $bn → $tn for display
+    const chg = nl.change_13wk_bn;
+    return {
+      key: "net_liquidity",
+      question: "How much spare cash is sloshing around markets?",
+      // Net liquidity is a backdrop, not a stress light — tone stays neutral
+      // ("ok") and the 13-week direction is surfaced as the trend sub-line.
+      tone: "ok" as Tone,
+      value: `$${t.toFixed(2)}T`,
+      sub: chg == null ? undefined
+        : `${chg >= 0 ? "▲ +" : "▼ "}$${Math.abs(chg).toFixed(0)}B vs 13 weeks ago`,
+      asOf: nl.as_of,
+      explain:
+        chg == null ? "Cash available to markets after the Treasury's account and overnight reverse-repo are drained out of the Fed's balance sheet."
+        : chg >= 0 ? "Net liquidity has risen over the last quarter — a gentle tailwind for risk assets, all else equal."
+                   : "Net liquidity has fallen over the last quarter — a gentle headwind for risk assets, all else equal.",
+      detail: "Net liquidity = Fed total assets (WALCL) − Treasury General Account (WTREGEN) − overnight reverse-repo (RRPONTSYD). Units are asserted against FRED metadata, not assumed: WALCL and WTREGEN are reported in $millions (normalized to billions ÷1000 before differencing) and RRPONTSYD is already in billions. It approximates the cash the banking system has to deploy. A rough, widely-watched backdrop — not a precise or timing signal. Source: Federal Reserve H.4.1 / NY Fed, via FRED series WALCL, WTREGEN, RRPONTSYD. As-of is the OLDEST of the three component dates (they publish on different lags).",
+    };
+  })();
+
+  // 2. Bond-market volatility — PROXY only. The real ICE MOVE index has no free
+  //    authoritative source on this tier, so we show TLT 21-day realized vol and
+  //    label it UNMISTAKABLY as a proxy (different units, not the MOVE index).
+  //    This proxy is display-only — it is NOT fed into the composite.
+  const mv = liq?.move;
+  const moveCard: Card | null = !mv ? null : mv.available && mv.proxy_value != null ? {
+    key: "move_index",
+    question: "How nervous is the bond market?",
+    // Tone neutral: this is a realized-vol proxy with no canonical public bands,
+    // and it is explicitly not the MOVE stress signal.
+    value: `${mv.proxy_value.toFixed(1)}% (proxy)`,
+    tone: "ok",
+    asOf: mv.as_of ?? undefined,
+    explain:
+      "A rough read on how much long-term US Treasuries have been moving lately. This is a PROXY — the 21-day realized volatility of the TLT Treasury ETF — not the actual MOVE index.",
+    detail: "TLT 21-day realized volatility (PROXY — NOT the ICE MOVE index). The real MOVE Index (Merrill Option Volatility Estimate) is the bond market's VIX: forward-looking IMPLIED volatility of US Treasury options, in basis points. It has no free authoritative machine-readable source on the current data tier, so instead we compute and clearly label a PROXY: the annualized 21-day REALIZED (backward-looking) price volatility of the TLT 20+yr Treasury ETF, in percent, from FMP end-of-day closes. Different methodology, different units — this is directionally related to bond-market turbulence but is NOT the MOVE index, and is deliberately kept out of the composite score. Source: TLT EOD via FMP. See docs/references/market-data-sources-alternates.md.",
+  } : {
+    // Proxy couldn't be computed (FMP fetch/parse failed) — flag it, never fabricate.
+    key: "move_index",
+    question: "How nervous is the bond market?",
+    value: "Unavailable",
+    tone: "ok",
+    explain: "Our bond-market volatility proxy (TLT realized volatility) couldn't be computed right now, so we're showing no number rather than a made-up one.",
+    detail: "TLT 21-day realized volatility (PROXY — NOT the ICE MOVE index). The real MOVE index has no free authoritative source on the current data tier; this card normally shows a clearly-labeled realized-vol proxy computed from TLT end-of-day closes. The underlying data couldn't be fetched this run, so we flag it as unavailable rather than fabricate a reading.",
+  };
+
+  // 3. VVIX — vol-of-VIX. Companion to the VIX card.
+  const vv = liq?.vvix;
+  const vvixCard: Card | null = !vv ? null : vv.available && vv.value != null ? {
+    key: "vvix",
+    question: "How jumpy are the fear-gauge expectations themselves?",
+    value: vv.value.toFixed(0),
+    // Level-only companion to VIX; tone neutral (no canonical public bands).
+    tone: "ok",
+    asOf: vv.as_of ?? undefined,
+    explain: "VVIX measures how much the VIX itself is expected to move — the 'volatility of volatility', the companion gauge to the VIX. Spikes can flag stress brewing under a calm-looking VIX.",
+    detail: "VVIX — the volatility-of-volatility index: expected volatility of the VIX over the next 30 days, derived from VIX options; the companion to the VIX. Sharp rises can precede equity-volatility spikes even when the VIX still looks tame. Long-run average is roughly 85-90. Source: CBOE's authoritative daily end-of-day VVIX history (cdn.cboe.com), a free public CSV — no quote-feed tier needed.",
+  } : {
+    key: "vvix",
+    question: "How jumpy are the fear-gauge expectations themselves?",
+    value: "Unavailable",
+    tone: "ok",
+    explain: "VVIX (the volatility of the VIX) couldn't be fetched right now, so we're showing no number rather than a made-up one.",
+    detail: "VVIX — the volatility-of-volatility index, the expected volatility of the VIX itself; the companion to the VIX. Normally fetched from CBOE's free daily end-of-day CSV (cdn.cboe.com). The source couldn't be reached this run, so we flag it as unavailable rather than fabricate a reading.",
+  };
+
+  // 4. Index concentration — top-10 % of S&P 500 cap (or labeled Mag-7 proxy).
+  const cc = liq?.concentration ?? null;
+  const concCard: Card | null = !cc ? {
+    // No reliable holdings source AND no usable quote-feed total cap → unavailable.
+    key: "index_concentration",
+    question: "How top-heavy is the S&P 500?",
+    value: "Unavailable",
+    tone: "ok",
+    explain: "A reliable holdings source for the top-10 weight isn't reachable right now, so we're showing no number rather than a made-up one.",
+    detail: "Index concentration = the combined weight of the 10 largest S&P 500 companies. Above ~35% is historically extreme top-heaviness. The machine-readable holdings sources (SSGA SPY, iShares IVV, slickcharts) weren't reachable from the server, and the quote feed reports no index-level market cap, so no reliable number is available. We flag it rather than fabricate.",
+  } : {
+    key: "index_concentration",
+    question: "How top-heavy is the S&P 500?",
+    value: `${cc.pct.toFixed(1)}%${cc.is_proxy ? " (proxy)" : ""}`,
+    tone: cc.pct > 35 ? "watch" : "ok",
+    asOf: cc.as_of,
+    explain:
+      cc.pct > 35 ? "The biggest handful of stocks make up an extreme share of the index — concentration risk is high." :
+                    "The largest stocks are a sizeable but not extreme share of the index.",
+    detail: cc.is_proxy
+      ? `PROXY: combined market cap of the Magnificent Seven (AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA) ÷ S&P 500 total market cap, from the live quote feed (${cc.source}). This approximates top-10 concentration when a direct holdings source is unavailable, and is clearly labeled a proxy. Band: >35% is historically extreme.`
+      : `Combined weight of the 10 largest S&P 500 companies (${cc.source}). Above ~35% is historically extreme top-heaviness — a shrinking handful drives the index, which raises drawdown risk if those names wobble. Band: >35% extreme.`,
+  };
+
+  // 5. Passive flows (4-week) — scaffolded, not yet wired (no clean feed, no DB).
+  const pf = liq?.passive_flows;
+  const passiveCard: Card | null = !pf ? null : {
+    key: "passive_flows_4wk",
+    question: "Is money flowing into or out of stock funds?",
+    value: "Not yet wired",
+    tone: "ok",
+    explain: "Weekly fund-flow data (into/out of equity mutual funds and ETFs) isn't wired into this page yet — we'd rather show that honestly than guess a number.",
+    detail: pf.note + " Source target: Investment Company Institute (ICI) weekly estimated long-term fund flows (equity funds + ETFs), a manual/weekly series. Wiring it up (and persisting it) is Part 2 of this feature — currently backlogged.",
+  };
+
+  // 6. Private credit — informational CAVEAT card (a blind spot, not a gauge).
+  const pc = liq?.private_credit;
+  const pcCard: Card | null = !pc ? null : {
+    key: "private_credit_note",
+    question: "What's the blind spot in the credit gauges above?",
+    value: pc.proxy_pct != null ? `${pc.proxy_pct.toFixed(1)}% ${pc.proxy_label ?? ""}`.trim() : "Caveat",
+    tone: "watch",
+    explain: "A lot of corporate-credit risk has moved into private credit, which doesn't trade or re-price daily — so the public spread gauges above only show part of the picture.",
+    detail: pc.note + (pc.proxy_pct != null ? "" : " (No clean public live proxy is wired in Part 1; this card is an informational caveat, not a live gauge.)"),
+  };
+
   return [
     {
       id: "market-mood",
@@ -379,6 +499,12 @@ function buildSections(d: MarketHealth): Section[] {
       title: "Breadth — who's participating",
       subtitle: "Is the whole market rising together, or is a shrinking handful of giant stocks carrying everyone else? This is the timing/participation read that valuation cannot give.",
       cards: cards(breadthCard),
+    },
+    {
+      id: "liquidity",
+      title: "Liquidity & positioning",
+      subtitle: "How much cash is sloshing around, how nervous are the bond and volatility markets, and how top-heavy / crowded are positions? These are backdrops and caveats — a public snapshot from live public data, not advice. Where a source can't be reached, the card says so rather than show a made-up number.",
+      cards: cards(nlCard, moveCard, vvixCard, concCard, passiveCard, pcCard),
     },
     {
       id: "recession",
@@ -507,9 +633,32 @@ function computeComposite(d: MarketHealth): Composite {
   const valMult = Math.max(0.85, Math.min(1.15, 1 + 0.15 * (valSub - 50) / 50));
 
   // ── 4. Timing overlay (VIX + breadth), bounded ±8 ─────────────────────────
+  // Stress term: VIX-based, MODULATED by real VVIX (vol-of-vol) when available —
+  // a high VVIX amplifies the VIX stress signal, a complacent VVIX damps it. The
+  // MOVE proxy is a realized-vol percent, NOT an implied-vol stress signal, so it
+  // is deliberately NOT fed here (display-only). Breadth term: prefer the SSGA
+  // top-10 concentration risk (a direct top-heaviness read); fall back to the
+  // RSP-vs-cap-weight breadth gap when concentration is unavailable.
+  // The VVIX-risk and concentration-risk interpolation bands are
+  // JUDGMENT-CALIBRATED HEURISTICS (author-chosen against observed history), NOT
+  // literature-derived — see docs/references/market-composite-references.md §3.3.
   const vixRisk = r.vix ?? 0;
-  const breadthRisk = r.breadth ?? 50;
-  const timing = Math.max(-8, Math.min(8, (vixRisk / 100) * 5 + ((breadthRisk - 50) / 50) * 3));
+  const vvixLevel = d.liquidity?.vvix;
+  const vvixRisk = vvixLevel?.available && vvixLevel.value != null
+    ? vvixRiskFromLevel(vvixLevel.value)   // VVIX → risk: [[80,0],[100,40],[120,70],[150,100]]
+    : 50;                                   // neutral when VVIX unavailable
+  const vvixBoost = Math.max(0.8, Math.min(1.2, 1 + (vvixRisk - 50) / 250));
+  const stressTerm = (vixRisk / 100) * 5 * vvixBoost;
+
+  const conc = d.liquidity?.concentration;
+  const concRisk = conc != null
+    ? concRiskFromTop10(conc.pct)           // top-10% → risk: [[20,0],[30,50],[40,100]]
+    : null;
+  const rspGapRisk = r.breadth ?? 50;       // RSP-vs-cap-weight breadth (fallback)
+  const breadthRisk = concRisk ?? rspGapRisk; // SSGA concentration preferred
+  const breadthTerm = ((breadthRisk - 50) / 50) * 3;
+
+  const timing = Math.max(-8, Math.min(8, stressTerm + breadthTerm));
 
   // ── 5. Sentiment tilt, bounded ±4 ─────────────────────────────────────────
   const tilt = (risk: number | null, cap: number) => (risk == null ? 0 : ((risk - 50) / 50) * cap);
@@ -534,8 +683,12 @@ function computeComposite(d: MarketHealth): Composite {
     if (contributors.length >= 3) break;
   }
   // Fold in valuation / breadth when they're pushing risk up (glass-box honesty).
+  // Keep "narrowing breadth" keyed off the RSP-vs-cap-weight participation gap
+  // (rspGapRisk) — NOT the new SSGA-concentration breadth slot — so the headline
+  // contributors stay CORE/breadth-driven and we don't surface VVIX/concentration
+  // as headline drivers (they live in the Timing redistribution, not the headline).
   if (valMult > 1.05 && !seen.has("stretched valuation")) contributors.push("stretched valuation");
-  if (breadthRisk >= 60 && !seen.has("narrowing breadth")) contributors.push("narrowing breadth");
+  if (rspGapRisk >= 60 && !seen.has("narrowing breadth")) contributors.push("narrowing breadth");
   const topContributors = contributors.slice(0, 3);
 
   const contribStr = topContributors.length
@@ -548,7 +701,7 @@ function computeComposite(d: MarketHealth): Composite {
     valSub >= 70 ? " Valuations are historically stretched on both CAPE and the Buffett Indicator — a backdrop that raises the stakes but says nothing about timing."
     : valSub >= 55 ? " Valuations are on the expensive side — a backdrop, not a timing signal."
     : "";
-  const breadthNote = breadthRisk >= 70
+  const breadthNote = rspGapRisk >= 70
     ? " Breadth is narrow — a shrinking handful of stocks is carrying the gains."
     : "";
 
@@ -666,7 +819,7 @@ export default async function MarketHealthPage() {
                         <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, color: "#1f1d18" }}>×{composite.valMult.toFixed(2)}</span>
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
-                        <span>Timing (VIX + breadth)</span>
+                        <span>Timing (VIX×VVIX + concentration)</span>
                         <span style={{ fontVariantNumeric: "tabular-nums", fontWeight: 600, color: "#1f1d18" }}>{composite.timing >= 0 ? "+" : ""}{composite.timing.toFixed(1)}</span>
                       </div>
                       <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
@@ -746,9 +899,17 @@ export default async function MarketHealthPage() {
                 the Chicago Fed; CAPE from Robert Shiller&apos;s data via multpl.com; the Buffett
                 Indicator from the Federal Reserve Z.1 flow-of-funds; Fear &amp; Greed is computed
                 here from its components (no third-party scrape); and AAII sentiment from the AAII
-                weekly survey. The page caches once a day and refreshes at midnight US Eastern, and
-                every card shows its own &ldquo;as of&rdquo; date so you can see exactly how current
-                each number is.
+                weekly survey. The <strong>Liquidity &amp; positioning</strong> section is fetched the
+                same way — net liquidity from the Fed&apos;s balance sheet, Treasury account and
+                reverse-repo (FRED series WALCL, WTREGEN, RRPONTSYD); VVIX from CBOE&apos;s free daily
+                end-of-day CSV; index concentration (the top-10 weight of the S&amp;P 500) from State
+                Street&apos;s SPY holdings file; and the bond-market volatility card from a clearly-labeled
+                TLT realized-volatility PROXY (the real ICE MOVE index has no free authoritative source on
+                this tier — so it is shown as a proxy and deliberately kept out of the composite score).
+                Where a source isn&apos;t reachable, that card honestly says &ldquo;unavailable&rdquo; or
+                &ldquo;not yet wired&rdquo; instead of showing a made-up number. The page caches once a day and
+                refreshes at midnight US Eastern, and every card shows its own &ldquo;as of&rdquo; date
+                so you can see exactly how current each number is.
               </div>
 
               <div style={{ marginTop: 24, fontSize: 12, color: "#5a564d", lineHeight: 1.7 }}>

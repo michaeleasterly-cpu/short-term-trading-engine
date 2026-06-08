@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"src/lib/*.test.ts\""
   },
   "dependencies": {
     "next": "16.2.6",
