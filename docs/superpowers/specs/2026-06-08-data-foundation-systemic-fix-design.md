@@ -6,6 +6,21 @@
 
 **Operator directive (2026-06-08):** "system fixes, not patch fixes… get the data fixed first," then (later, separate efforts) a denormalized+normalized macro feature layer, then machine learning. This spec covers ONLY the foundation fix. Macro feature layer + ML are explicitly out of scope (see §9).
 
+## 0. STRATEGY (operator decision, 2026-06-08) — re-ingest from scratch, contract-first
+
+The operator's decision supersedes the in-place-cleanup framing below: **we do NOT repair the existing rows. We make the ingestion contract correct, wipe the child data, and re-ingest once — correctly.** The bar is "the next run works": after the contract is hardened, a re-ingest must produce a clean substrate *by construction*, or hard-fail loudly — never silently land a defect.
+
+Revised order (replaces §4's Phase B in-place cleanup):
+1. **Build the identity spine correctly** — `ticker_classifications` + a complete, correct `ticker_history` (SEC-authoritative; price-bar + FMP corroboration; SEC wins on conflict), + SEC-authoritative `asset_class`, + the missing FK. This is the make-it-work foundation; everything resolves against it.
+2. **Harden the ingestion contract** — unified resolver, **reject-not-NULL** (log-only → then hard), scope constraints, FMP window-clamp at the transport, resumable stages, NOT NULL columns. Now a bad write is impossible-or-loud.
+3. **Wipe child data + re-ingest** through the hardened contract (prices from the survivorship-free snapshot; fundamentals from SEC scoped to stock/reit; etc.). reject-not-NULL means any unresolvable row stops the run → fix the spine → re-run; no silent garbage.
+4. **Validate** (the DB-wired test) gates `DATA_OPERATIONS_COMPLETE`.
+
+§7 decisions, resolved (no longer open):
+- **§7-A → hard-reject, log-only first then hard.** For a from-scratch re-ingest this is the safety mechanism, not a risk.
+- **§7-B → SEC-first identity-spine build** (submissions first-filing date as the primary anchor; first price bar + FMP listing as corroboration; SEC wins on conflict; price-bar evidence fills non-SEC/non-US). Concrete build algorithm: db-architect expert designs it as the first execution step (this is where "make it work" lives).
+- **§7-C → moot under re-ingest.** Fundamentals re-ingest is scope-enforced to stock/reit at the write, so etf/fund fundamentals are never created; the 532 mislabeled-as-fund operating companies are fixed by the SEC-authoritative `asset_class` step (1) before re-ingest.
+
 ---
 
 ## 1. Problem — one root cause wearing many masks
