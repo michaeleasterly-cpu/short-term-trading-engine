@@ -459,26 +459,126 @@ function buildSections(d: MarketHealth): Section[] {
       : `Combined weight of the 10 largest S&P 500 companies (${cc.source}). Above ~35% is historically extreme top-heaviness — a shrinking handful drives the index, which raises drawdown risk if those names wobble. Band: >35% extreme.`,
   };
 
-  // 5. Passive flows (4-week) — scaffolded, not yet wired (no clean feed, no DB).
-  const pf = liq?.passive_flows;
-  const passiveCard: Card | null = !pf ? null : {
-    key: "passive_flows_4wk",
+  // 5. Equity fund flows — ICI weekly combined MF+ETF flows (DISPLAY-ONLY; not in
+  //    the composite). Replaces the old "not yet wired" passive-flows scaffold.
+  const ef = d.flows_credit?.equity_flows;
+  const flowsCard: Card | null = !ef ? null : ef.available && ef.latest_equity_m != null ? (() => {
+    const m = ef.latest_equity_m!;
+    const inOut = m >= 0 ? "in" : "out";
+    const billions = Math.abs(m) / 1000;
+    const fmtB = (x: number) => `${x >= 0 ? "+" : "−"}$${(Math.abs(x) / 1000).toFixed(1)}B`;
+    // Trend sub-line: the prior weeks' direction, neutral (decoupled from tone).
+    const trendStr = ef.recent.length >= 2
+      ? "recent weeks: " + ef.recent.slice(-3).map(w => fmtB(w.equity_m)).join(" → ")
+      : undefined;
+    return {
+      key: "equity_fund_flows",
+      question: "Is money flowing into or out of stock funds?",
+      // Direction is informational backdrop, not a stress light → neutral tone.
+      value: `${m >= 0 ? "+" : "−"}$${billions.toFixed(1)}B (net ${inOut})`,
+      tone: "ok",
+      asOf: ef.week_ending ?? undefined,
+      sub: trendStr,
+      explain:
+        m >= 0
+          ? `Investors put a net ${fmtB(m)} into US stock mutual funds and ETFs the latest reported week — money flowing IN.`
+          : `Investors pulled a net ${fmtB(m)} out of US stock mutual funds and ETFs the latest reported week — money flowing OUT.`
+        + (ef.stale ? " (Note: this is the latest ICI file but it looks more than ~10 days old.)" : ""),
+      detail: `Latest weekly net flow into US equity mutual funds + ETFs combined (the "Equity — Total" line), week ending ${ef.week_ending}. Positive = net buying, negative = net selling. Source: ICI (Investment Company Institute), weekly estimated combined mutual-fund + ETF flows, published each Wednesday. This is a real fetched value, in $millions, parsed from ICI's weekly XLS — it is shown for context and is NOT part of the composite score.`,
+    };
+  })() : {
+    key: "equity_fund_flows",
     question: "Is money flowing into or out of stock funds?",
-    value: "Not yet wired",
+    value: "Unavailable",
     tone: "ok",
-    explain: "Weekly fund-flow data (into/out of equity mutual funds and ETFs) isn't wired into this page yet — we'd rather show that honestly than guess a number.",
-    detail: pf.note + " Source target: Investment Company Institute (ICI) weekly estimated long-term fund flows (equity funds + ETFs), a manual/weekly series. Wiring it up (and persisting it) is Part 2 of this feature — currently backlogged.",
+    explain: "The weekly equity fund-flow file couldn't be fetched right now, so we're showing no number rather than a made-up one.",
+    detail: `Latest weekly net flow into US equity mutual funds + ETFs combined. Source: ICI (Investment Company Institute) weekly combined MF + ETF flows XLS. The source couldn't be reached this run, so we flag it as unavailable rather than fabricate a reading. (Attempted: ${ef.source_url})`,
   };
 
-  // 6. Private credit — informational CAVEAT card (a blind spot, not a gauge).
-  const pc = liq?.private_credit;
-  const pcCard: Card | null = !pc ? null : {
-    key: "private_credit_note",
-    question: "What's the blind spot in the credit gauges above?",
-    value: pc.proxy_pct != null ? `${pc.proxy_pct.toFixed(1)}% ${pc.proxy_label ?? ""}`.trim() : "Caveat",
-    tone: "watch",
-    explain: "A lot of corporate-credit risk has moved into private credit, which doesn't trade or re-price daily — so the public spread gauges above only show part of the picture.",
-    detail: pc.note + (pc.proxy_pct != null ? "" : " (No clean public live proxy is wired in Part 1; this card is an informational caveat, not a live gauge.)"),
+  // 6. Private credit / BDC discount-to-NAV — DISPLAY-ONLY (not in the composite).
+  //    Keeps the honest one-line context that private credit is mark-to-model /
+  //    opaque, but now WITH a real market number: the public-BDC discount to last-
+  //    reported NAV (price-to-book) basket + the BIZD ETF level.
+  const bdc = d.flows_credit?.bdc_discount;
+  const pcCard: Card | null = !bdc ? null : bdc.available && bdc.avg_discount_pct != null ? (() => {
+    const avg = bdc.avg_discount_pct!;
+    const nameStr = bdc.names.map(n => `${n.ticker} ${n.discount_pct >= 0 ? "+" : "−"}${Math.abs(n.discount_pct).toFixed(0)}%`).join(", ");
+    const bizdStr = bdc.bizd_price != null && bdc.bizd_year_low != null && bdc.bizd_year_high != null
+      ? `BIZD ${bdc.bizd_price.toFixed(2)} (52-wk ${bdc.bizd_year_low.toFixed(2)}–${bdc.bizd_year_high.toFixed(2)})`
+      : null;
+    return {
+      key: "bdc_discount",
+      question: "How does the market value private-credit lenders?",
+      value: `${avg >= 0 ? "+" : "−"}${Math.abs(avg).toFixed(0)}% vs NAV (avg)`,
+      tone: avg <= -15 ? "watch" : "ok",
+      asOf: bdc.as_of,
+      sub: bizdStr ?? undefined,
+      explain:
+        avg <= -15
+          ? "Public business-development companies (the listed wrapper around direct-lending books) trade at a sizeable discount to their last-reported asset value — the market is skeptical of those marks."
+          : "Public business-development companies (the listed wrapper around direct-lending books) trade close to their last-reported asset value.",
+      detail: `Average discount-to-NAV across a basket of large public BDCs (${nameStr}), measured as price-to-book minus 1 — for a BDC, book value per share is its net asset value, so this is the market price relative to stated NAV. ${bizdStr ? bizdStr + ". " : ""}NAV (book value) is the last-reported figure and updates only when each BDC files (quarterly), while the price is daily — that is a fact about the data, not a hedge. A widening discount within a quarter is the market re-pricing direct-lending books before NAVs are restated. Much corporate-credit risk now sits in private credit / direct lending that doesn't mark-to-market daily, so the public spread gauges above only show part of the picture; this card is the listed-BDC read on it. Source: FMP. Shown for context — NOT part of the composite score.`,
+    };
+  })() : {
+    key: "bdc_discount",
+    question: "How does the market value private-credit lenders?",
+    value: "Unavailable",
+    tone: "ok",
+    explain: "The public-BDC valuation data couldn't be fetched right now, so we're showing no number rather than a made-up one.",
+    detail: "Average discount-to-NAV across a basket of large public BDCs (price-to-book minus 1) plus the BIZD ETF level. Source: FMP. The source couldn't be reached this run, so we flag it as unavailable rather than fabricate a reading. Note: NAV (book value) is last-reported (quarterly); the price is daily.",
+  };
+
+  // 7. Credit quality spread (BAA−AAA) — FRED daily (DISPLAY-ONLY; not in the
+  //    composite, and distinct from the HY/IG OAS gauges above).
+  const qs = d.flows_credit?.quality_spread;
+  const qsCard: Card | null = !qs ? null : qs.available && qs.spread_pp != null ? {
+    key: "quality_spread",
+    question: "How much more do weaker companies pay than the strongest?",
+    value: `${qs.spread_pp.toFixed(2)} pp`,
+    tone: qs.spread_pp > 2 ? "watch" : "ok",
+    asOf: qs.as_of ?? undefined,
+    explain:
+      qs.spread_pp > 2
+        ? "The gap between lower-rated (Baa) and top-rated (Aaa) corporate borrowing costs is wide — the market is charging more for credit-quality risk."
+        : "The gap between lower-rated (Baa) and top-rated (Aaa) corporate borrowing costs is narrow — credit-quality risk is being priced calmly.",
+    detail: `Moody's Seasoned Baa corporate bond yield minus the Aaa yield (${qs.baa?.toFixed(2)}% − ${qs.aaa?.toFixed(2)}%), in percentage points. This is the classic credit-QUALITY spread: the extra yield investors demand to hold lower-rated investment-grade bonds over the highest-rated ones. It is a level-yield quality differential on long-maturity seasoned bonds — distinct from the option-adjusted HY/IG index spreads shown above. Source: FRED, daily (series DBAA and DAAA). Shown for context — NOT part of the composite score.`,
+  } : {
+    key: "quality_spread",
+    question: "How much more do weaker companies pay than the strongest?",
+    value: "Unavailable",
+    tone: "ok",
+    explain: "The Baa−Aaa quality spread couldn't be fetched right now, so we're showing no number rather than a made-up one.",
+    detail: "Moody's Seasoned Baa minus Aaa corporate bond yield, in percentage points — the credit-quality spread. Source: FRED, daily (DBAA and DAAA). The source couldn't be reached this run, so we flag it as unavailable rather than fabricate a reading.",
+  };
+
+  // 8. IG/HY bond-ETF trend (LQD/HYG) — FMP (DISPLAY-ONLY; not in the composite).
+  const bet = d.flows_credit?.bond_etf_trend;
+  const betCard: Card | null = !bet ? null : bet.available && bet.etfs.length ? (() => {
+    const fmtEtf = (e: NonNullable<typeof bet>["etfs"][number]) => {
+      const trend = e.above50 && e.above200 ? "above both averages" : !e.above50 && !e.above200 ? "below both averages" : "between its averages";
+      return `${e.ticker} ${e.price.toFixed(2)} (${trend})`;
+    };
+    const allBelow = bet.etfs.every(e => !e.above50 && !e.above200);
+    const allAbove = bet.etfs.every(e => e.above50 && e.above200);
+    return {
+      key: "bond_etf_trend",
+      question: "Which way are corporate-bond funds trending?",
+      value: bet.etfs.map(fmtEtf).join(" · "),
+      tone: "ok",
+      asOf: bet.as_of,
+      explain:
+        allBelow ? "The two big corporate-bond funds (investment-grade LQD and high-yield HYG) are both below their 50- and 200-day averages — a softening trend in corporate-bond demand."
+        : allAbove ? "The two big corporate-bond funds (investment-grade LQD and high-yield HYG) are both above their 50- and 200-day averages — a firm trend in corporate-bond demand."
+        : "The two big corporate-bond funds (investment-grade LQD and high-yield HYG) are mixed relative to their moving averages.",
+      detail: `Price of the two dominant corporate-bond ETFs versus their 50-day and 200-day moving averages: ${bet.etfs.map(e => `${e.label} (${e.ticker}) ${e.price.toFixed(2)} vs 50-day ${e.avg50.toFixed(2)} / 200-day ${e.avg200.toFixed(2)}`).join("; ")}. Price above both averages is an uptrend, below both a downtrend — a read on demand for investment-grade and high-yield corporate bonds. Source: FMP. Shown for context — NOT part of the composite score.`,
+    };
+  })() : {
+    key: "bond_etf_trend",
+    question: "Which way are corporate-bond funds trending?",
+    value: "Unavailable",
+    tone: "ok",
+    explain: "The corporate-bond ETF data (LQD/HYG) couldn't be fetched right now, so we're showing no number rather than a made-up one.",
+    detail: "Levels of the investment-grade (LQD) and high-yield (HYG) corporate-bond ETFs versus their 50- and 200-day moving averages. Source: FMP. The source couldn't be reached this run, so we flag it as unavailable rather than fabricate a reading.",
   };
 
   return [
@@ -504,7 +604,7 @@ function buildSections(d: MarketHealth): Section[] {
       id: "liquidity",
       title: "Liquidity & positioning",
       subtitle: "How much cash is sloshing around, how nervous are the bond and volatility markets, and how top-heavy / crowded are positions? These are backdrops and caveats — a public snapshot from live public data, not advice. Where a source can't be reached, the card says so rather than show a made-up number.",
-      cards: cards(nlCard, moveCard, vvixCard, concCard, passiveCard, pcCard),
+      cards: cards(nlCard, moveCard, vvixCard, concCard, flowsCard, pcCard),
     },
     {
       id: "recession",
@@ -516,7 +616,7 @@ function buildSections(d: MarketHealth): Section[] {
       id: "credit",
       title: "Credit & borrowing",
       subtitle: "How healthy is the plumbing that lets companies borrow money?",
-      cards: cards(hyCard, csCard, nfciCard, ffrCard),
+      cards: cards(hyCard, csCard, qsCard, betCard, nfciCard, ffrCard),
     },
     {
       id: "consumer",
@@ -906,8 +1006,14 @@ export default async function MarketHealthPage() {
                 Street&apos;s SPY holdings file; and the bond-market volatility card from a clearly-labeled
                 TLT realized-volatility PROXY (the real ICE MOVE index has no free authoritative source on
                 this tier — so it is shown as a proxy and deliberately kept out of the composite score).
-                Where a source isn&apos;t reachable, that card honestly says &ldquo;unavailable&rdquo; or
-                &ldquo;not yet wired&rdquo; instead of showing a made-up number. The page caches once a day and
+                Four context cards round out the picture, each fetched live and each kept out of the composite
+                score: equity fund flows (the weekly net flow into US stock mutual funds + ETFs, from the
+                Investment Company Institute&apos;s weekly file); the Baa−Aaa credit-quality spread (FRED
+                series DBAA and DAAA, daily); the public-BDC discount to last-reported NAV plus the BIZD ETF
+                level (from a quote feed); and the investment-grade / high-yield corporate-bond ETF trend (LQD
+                and HYG vs their 50- and 200-day averages). Each states exactly what it measures and where it
+                comes from. Where a source isn&apos;t reachable, that card honestly says &ldquo;unavailable&rdquo;
+                instead of showing a made-up number. The page caches once a day and
                 refreshes at midnight US Eastern, and every card shows its own &ldquo;as of&rdquo; date
                 so you can see exactly how current each number is.
               </div>

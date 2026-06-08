@@ -86,6 +86,7 @@ export interface MarketHealth {
     note: string;
   };
   liquidity: Liquidity;
+  flows_credit: FlowsAndCredit;
 }
 
 // ── Liquidity & positioning (Part 1: self-fetching, NO DB) ─────────────────
@@ -139,6 +140,68 @@ export interface Liquidity {
   private_credit: PrivateCreditNote;
 }
 
+// ── DISPLAY-ONLY context cards (fund flows / credit / corporate bonds) ──────
+// Four cards added to the /market page that are fetched live (ICI + FMP + FRED)
+// and are NEVER fed into computeComposite. They state exactly WHAT each measures
+// + WHERE it is from (no "proxy" hedge wording). Each carries its own as_of and
+// flags `available: false` when its source can't be reached (never fabricated).
+//   Sources validated: docs/references/market-data-sources-flows-credit.md.
+
+// 1. Equity fund flows — ICI weekly combined MF+ETF estimated flows (XLS).
+export interface EquityFundFlows {
+  available: boolean;
+  latest_equity_m: number | null;   // latest weekly Equity-Total net flow, $millions
+  week_ending: string | null;       // the file's latest week-ending date (as_of)
+  recent: Array<{ week: string; equity_m: number }>; // last few weeks, oldest→newest
+  stale: boolean;                    // latest week-ending > ~10 days old
+  source_url: string;                // the URL actually fetched (or attempted)
+}
+
+// 2. Credit quality spread — Moody's Baa minus Aaa seasoned yields (FRED, daily).
+export interface QualitySpread {
+  available: boolean;
+  spread_pp: number | null;  // DBAA − DAAA, percentage points
+  baa: number | null;        // DBAA level, %
+  aaa: number | null;        // DAAA level, %
+  as_of: string | null;      // latest common observation date
+}
+
+// 3. BDC discount-to-NAV — public BDC price-to-book (= price/NAV) basket via FMP
+//    plus the BIZD ETF level vs its 52-week range. NAV (book value) is the
+//    last-reported (quarterly) figure — a fact about the data, stated plainly.
+export interface BdcDiscount {
+  available: boolean;
+  avg_discount_pct: number | null;   // basket mean of (priceToBook − 1) × 100
+  names: Array<{ ticker: string; discount_pct: number }>; // per-name discounts
+  bizd_price: number | null;         // BIZD ETF level
+  bizd_year_low: number | null;
+  bizd_year_high: number | null;
+  as_of: string;                     // EOD date the prices reflect
+}
+
+// 4. IG/HY bond-ETF trend — LQD (investment grade) + HYG (high yield) levels vs
+//    their 50/200-day moving averages (FMP quote feed).
+export interface BondEtfTrend {
+  available: boolean;
+  etfs: Array<{
+    ticker: string;
+    label: string;
+    price: number;
+    avg50: number;
+    avg200: number;
+    above50: boolean;
+    above200: boolean;
+  }>;
+  as_of: string;
+}
+
+export interface FlowsAndCredit {
+  equity_flows: EquityFundFlows;
+  quality_spread: QualitySpread;
+  bdc_discount: BdcDiscount;
+  bond_etf_trend: BondEtfTrend;
+}
+
 // ── low-level fetchers ────────────────────────────────────────────────────
 type Obs = [string, number];
 
@@ -189,6 +252,39 @@ async function fmpHistoryDated(symbol: string, keep = 200): Promise<Obs[]> {
     .map((r) => [r.date, Number(r.close)] as Obs)
     .sort((a, b) => (a[0] < b[0] ? -1 : 1))
     .slice(-keep);
+}
+
+// FMP quote incl. moving averages + 52-week range — for the bond-ETF trend +
+// BIZD cards. Same feed/rfetch as fmpQuote; returns null on any failure.
+interface FmpQuoteFull {
+  symbol: string;
+  price: number;
+  priceAvg50?: number;
+  priceAvg200?: number;
+  yearLow?: number;
+  yearHigh?: number;
+  timestamp?: number;
+}
+async function fmpQuoteFull(symbol: string): Promise<FmpQuoteFull | null> {
+  const url = `https://financialmodelingprep.com/stable/quote?symbol=${encodeURIComponent(symbol)}&apikey=${FMP_KEY}`;
+  const res = await rfetch(url, { next: { revalidate: DAY } });
+  if (!res.ok) return null;
+  const j = (await res.json()) as FmpQuoteFull[];
+  return Array.isArray(j) && j.length ? j[0] : null;
+}
+
+// FMP TTM ratios — for the BDC price-to-book (= price/NAV). Returns the
+// priceToBookRatioTTM (and bvps for context) or null on any failure.
+async function fmpPriceToBook(symbol: string): Promise<{ pb: number; bvps: number | null } | null> {
+  const url = `https://financialmodelingprep.com/stable/ratios-ttm?symbol=${encodeURIComponent(symbol)}&apikey=${FMP_KEY}`;
+  const res = await rfetch(url, { next: { revalidate: DAY } });
+  if (!res.ok) return null;
+  const j = (await res.json()) as Array<{ priceToBookRatioTTM?: number; bookValuePerShareTTM?: number }>;
+  const row = Array.isArray(j) && j.length ? j[0] : null;
+  const pb = row?.priceToBookRatioTTM;
+  return typeof pb === "number" && pb > 0
+    ? { pb, bvps: typeof row?.bookValuePerShareTTM === "number" ? row.bookValuePerShareTTM : null }
+    : null;
 }
 
 async function fetchXls(url: string): Promise<XLSX.WorkBook | null> {
@@ -325,9 +421,193 @@ async function fetchTltMoveProxy(): Promise<{ value: number; as_of: string } | n
   return { value: Math.round(annVol * 10) / 10, as_of: obs[obs.length - 1][0] };
 }
 
+// ── ICI weekly equity flows: pure parse (exported + unit-testable) ─────────
+// The ICI "Weekly MF & ETF Public Report" sheet (header row 4) lays the data out
+// as `Date | Total LT | <spacer> | Equity Total | <spacer> | Equity Domestic |
+// …`. The WEEKLY block begins after an "Estimated weekly fund flows" marker row;
+// the rows above it are the MONTHLY history (which we must NOT read). This pure
+// function takes the raw sheet rows (header:1 form) and returns the weekly
+// Equity-Total series, oldest→newest, in $millions. Empty array on any structural
+// surprise (never fabricates). Validated 2026-06-08: last week 05/27/2026 = −2214.
+//   Source: docs/references/market-data-sources-flows-credit.md §Gauge 1.
+export function parseIciWeeklyEquity(
+  rows: Array<Array<string | number | null | undefined>>,
+): Array<{ week: string; equity_m: number }> {
+  // Find the "Estimated weekly fund flows" marker; the weekly data starts below.
+  let weeklyStart = -1;
+  for (let i = 0; i < rows.length; i++) {
+    const first = String(rows[i]?.[0] ?? "").trim().toLowerCase();
+    if (first.startsWith("estimated weekly fund flows")) { weeklyStart = i + 1; break; }
+  }
+  if (weeklyStart === -1) return [];
+  // Column layout: index 0 = Date, index 3 = Equity Total (a NaN spacer sits at
+  // index 2 between "Total LT" and the Equity block). Asserted against the header
+  // row + sample data, not assumed — see the doc's column-order note.
+  const EQUITY_COL = 3;
+  const out: Array<{ week: string; equity_m: number }> = [];
+  for (let i = weeklyStart; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r) continue;
+    const rawDate = String(r[0] ?? "").trim();
+    // Weekly rows are MM/DD/YYYY; stop at the first non-date row (notes/footer).
+    const m = rawDate.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!m) continue;
+    const v = Number(r[EQUITY_COL]);
+    if (!Number.isFinite(v)) continue;
+    const iso = `${m[3]}-${m[1]}-${m[2]}`; // MM/DD/YYYY → YYYY-MM-DD
+    out.push({ week: iso, equity_m: v });
+  }
+  // The block is already chronological in the file; sort defensively.
+  out.sort((a, b) => (a.week < b.week ? -1 : 1));
+  return out;
+}
+
+// ── Credit quality spread: pure compute (exported + unit-testable) ─────────
+// BAA−AAA = DBAA − DAAA, in percentage points. Both are Moody's seasoned
+// corporate-bond YIELD levels (%, daily on FRED), so the difference is the
+// classic credit-QUALITY spread. Rounded to 2dp. Validated 2026-06-08:
+// 6.06 − 5.53 = 0.53 pp. Source: doc §Gauge 3a.
+export function qualitySpreadPp(baa: number, aaa: number): number {
+  return Math.round((baa - aaa) * 100) / 100;
+}
+
+// ── BDC discount-to-NAV: pure compute (exported + unit-testable) ───────────
+// For a BDC, book value per share ≈ NAV per share, so price-to-book IS the
+// price/NAV ratio; discount-to-NAV = (priceToBook − 1) × 100 (negative ⇒ trading
+// below NAV). Rounded to 1dp. Validated 2026-06-08: ARCC P/B 0.958 → −4.2%,
+// FSK P/B 0.565 → −43.5%. Source: doc §Gauge 2.
+export function bdcDiscountPct(priceToBook: number): number {
+  return Math.round((priceToBook - 1) * 1000) / 10;
+}
+
 // Excel serial date → ISO (Excel epoch base 1899-12-30 to absorb the 1900 leap bug).
 function xlDate(serial: number): string {
   return new Date(Date.UTC(1899, 11, 30) + serial * 86400000).toISOString().slice(0, 10);
+}
+
+// ── DISPLAY-ONLY card fetchers (fund flows / credit / corporate bonds) ──────
+// These build the four FlowsAndCredit cards. Each returns an `available: false`
+// shape on any fetch/parse failure rather than fabricating a number.
+
+// 1. Equity fund flows — ICI weekly combined MF+ETF XLS. The directory segment is
+//    always `<YYYY>-01` (the file is created in Jan + updated in place all year);
+//    if the current-year URL 404s we try last year's, and flag it honestly.
+//    The .xls is a legacy BIFF/OLE2 file — the xlsx lib reads it directly (the
+//    page already parses the AAII + SSGA .xls files the same way).
+async function fetchEquityFundFlows(): Promise<EquityFundFlows> {
+  const year = new Date().getUTCFullYear();
+  const urlFor = (y: number) =>
+    `https://www.ici.org/system/files/${y}-01/combined_flows_data_${y}.xls`;
+  const fail = (url: string): EquityFundFlows => ({
+    available: false, latest_equity_m: null, week_ending: null, recent: [],
+    stale: false, source_url: url,
+  });
+  for (const y of [year, year - 1]) {
+    const url = urlFor(y);
+    const wb = await fetchXls(url);
+    if (!wb) continue;
+    try {
+      const sh = wb.Sheets["Weekly MF & ETF Public Report"] ?? wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json<Array<string | number | null>>(sh, { header: 1 });
+      const series = parseIciWeeklyEquity(rows);
+      if (!series.length) continue;
+      const latest = series[series.length - 1];
+      // Stale if the latest week-ending is more than ~10 days old.
+      const ageDays = (Date.now() - new Date(latest.week + "T00:00:00Z").getTime()) / 86_400_000;
+      return {
+        available: true,
+        latest_equity_m: latest.equity_m,
+        week_ending: latest.week,
+        recent: series.slice(-5),
+        stale: ageDays > 10,
+        source_url: url,
+      };
+    } catch { /* structural surprise → try the prior year, else flag unavailable */ }
+  }
+  return fail(urlFor(year));
+}
+
+// 2. Credit quality spread — FRED DBAA − DAAA (daily). Reuses fredSeries; aligns
+//    on the latest common observation date so the spread is same-day.
+async function fetchQualitySpread(): Promise<QualitySpread> {
+  const [baaObs, aaaObs] = await Promise.all([fredSeries("DBAA", 120), fredSeries("DAAA", 120)]);
+  if (!baaObs.length || !aaaObs.length) {
+    return { available: false, spread_pp: null, baa: null, aaa: null, as_of: null };
+  }
+  // Build a date→value map for AAA, then walk BAA newest-first for the latest
+  // date that exists in BOTH series (they share the FRED publish cadence).
+  const aaaMap = new Map(aaaObs.map((o) => [o[0], o[1]]));
+  for (let i = baaObs.length - 1; i >= 0; i--) {
+    const [date, baa] = baaObs[i];
+    const aaa = aaaMap.get(date);
+    if (aaa != null) {
+      return { available: true, spread_pp: qualitySpreadPp(baa, aaa), baa, aaa, as_of: date };
+    }
+  }
+  return { available: false, spread_pp: null, baa: null, aaa: null, as_of: null };
+}
+
+// 3. BDC discount-to-NAV — basket of large public BDCs (price-to-book = price/NAV)
+//    + the BIZD ETF level vs its 52-week range. NAV (book value) is the
+//    last-reported (quarterly) figure — stated plainly on the card, not hedged.
+async function fetchBdcDiscount(): Promise<BdcDiscount> {
+  const BASKET = ["ARCC", "ORCC", "FSK", "BXSL"];
+  const as_of = new Date().toISOString().slice(0, 10);
+  const [pbs, bizd] = await Promise.all([
+    Promise.all(BASKET.map((t) => fmpPriceToBook(t))),
+    fmpQuoteFull("BIZD"),
+  ]);
+  const names: Array<{ ticker: string; discount_pct: number }> = [];
+  BASKET.forEach((t, i) => {
+    const r = pbs[i];
+    if (r) names.push({ ticker: t, discount_pct: bdcDiscountPct(r.pb) });
+  });
+  const bizdAsOf = bizd?.timestamp
+    ? new Date(bizd.timestamp * 1000).toISOString().slice(0, 10)
+    : as_of;
+  if (!names.length && !bizd) {
+    return {
+      available: false, avg_discount_pct: null, names: [], bizd_price: null,
+      bizd_year_low: null, bizd_year_high: null, as_of: bizdAsOf,
+    };
+  }
+  const avg = names.length
+    ? Math.round((names.reduce((s, n) => s + n.discount_pct, 0) / names.length) * 10) / 10
+    : null;
+  return {
+    available: true,
+    avg_discount_pct: avg,
+    names,
+    bizd_price: bizd?.price ?? null,
+    bizd_year_low: bizd?.yearLow ?? null,
+    bizd_year_high: bizd?.yearHigh ?? null,
+    as_of: bizdAsOf,
+  };
+}
+
+// 4. IG/HY bond-ETF trend — LQD + HYG levels vs their 50/200-day MAs (FMP quote).
+async function fetchBondEtfTrend(): Promise<BondEtfTrend> {
+  const DEFS: Array<{ ticker: string; label: string }> = [
+    { ticker: "LQD", label: "Investment grade (iShares iBoxx $ IG)" },
+    { ticker: "HYG", label: "High yield (iShares iBoxx $ HY)" },
+  ];
+  const quotes = await Promise.all(DEFS.map((d) => fmpQuoteFull(d.ticker)));
+  const etfs: BondEtfTrend["etfs"] = [];
+  let latestTs = 0;
+  DEFS.forEach((d, i) => {
+    const q = quotes[i];
+    if (!q || !Number.isFinite(q.price) || q.priceAvg50 == null || q.priceAvg200 == null) return;
+    etfs.push({
+      ticker: d.ticker, label: d.label, price: q.price,
+      avg50: q.priceAvg50, avg200: q.priceAvg200,
+      above50: q.price >= q.priceAvg50, above200: q.price >= q.priceAvg200,
+    });
+    if (q.timestamp && q.timestamp > latestTs) latestTs = q.timestamp;
+  });
+  const as_of = latestTs
+    ? new Date(latestTs * 1000).toISOString().slice(0, 10)
+    : new Date().toISOString().slice(0, 10);
+  return { available: etfs.length > 0, etfs, as_of };
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────
@@ -444,6 +724,8 @@ export async function getMarketHealth(): Promise<MarketHealth> {
     fredResults, vixQ, vixHistD, spxHistD, gspcH, rspH, aaiiWb, capeText, gdpObs, equitiesObs,
     // ── liquidity & positioning (Part 1, self-fetching, NO DB) ──
     walclObs, wtregenObs, rrpObs, moveProxy, vvixObs, ssgaTop10, mag7Caps, spxTotalCap,
+    // ── DISPLAY-ONLY flows / credit / corporate-bond cards (NOT in composite) ──
+    equityFlows, qualitySpread, bdcDiscount, bondEtfTrend,
   ] = await Promise.all([
     Promise.all(FRED.map(([, id]) => fredSeries(id))),
     fmpQuote("^VIX"),
@@ -464,6 +746,11 @@ export async function getMarketHealth(): Promise<MarketHealth> {
     fetchSsgaTop10(),               // index concentration: SSGA SPY holdings xlsx (pre-computed Weight col)
     Promise.all(MAG7.map((s) => fmpMarketCap(s))),  // proxy numerator (Mag-7 caps) — concentration FALLBACK only
     fmpMarketCap("^GSPC"),          // proxy denominator: S&P 500 total mkt cap (0 on this feed → proxy unavailable, NOT fabricated)
+    // DISPLAY-ONLY cards — live-fetched, never fed into computeComposite:
+    fetchEquityFundFlows(),         // ICI weekly combined MF+ETF equity flows (XLS)
+    fetchQualitySpread(),           // FRED DBAA − DAAA credit-quality spread (daily)
+    fetchBdcDiscount(),             // FMP BDC price-to-book basket + BIZD level
+    fetchBondEtfTrend(),            // FMP LQD/HYG levels vs 50/200-day MAs
   ]);
 
   const indicators: Record<string, Indicator> = {};
@@ -695,5 +982,12 @@ export async function getMarketHealth(): Promise<MarketHealth> {
     },
     breadth,
     liquidity,
+    // DISPLAY-ONLY context cards — fetched live, NOT inputs to computeComposite.
+    flows_credit: {
+      equity_flows: equityFlows,
+      quality_spread: qualitySpread,
+      bdc_discount: bdcDiscount,
+      bond_etf_trend: bondEtfTrend,
+    },
   };
 }
