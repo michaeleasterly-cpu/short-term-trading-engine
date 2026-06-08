@@ -22,6 +22,9 @@ import {
   moveBand,
   vvixRiskFromLevel,
   concRiskFromTop10,
+  parseIciWeeklyEquity,
+  qualitySpreadPp,
+  bdcDiscountPct,
 } from "./market-data.ts";
 
 test("netLiquidityUsdBn normalizes WALCL + WTREGEN millions → billions before differencing", () => {
@@ -155,6 +158,78 @@ test("Timing: the ±8 cap holds at the extremes", () => {
     const t = timingBlock({ vixRisk: vix, vvix: vv, top10Pct: c });
     assert.ok(t >= -8 && t <= 8, `timing ${t} out of ±8 for vix=${vix} vvix=${vv} conc=${c}`);
   }
+});
+
+// ── DISPLAY-ONLY flows/credit cards (NOT in the composite) ─────────────────
+// The ICI weekly XLS lays the data out with the weekly block AFTER an "Estimated
+// weekly fund flows" marker row; the rows above are the MONTHLY history, which the
+// parser must NOT read. Column layout (header:1 form): index 0 = Date, index 3 =
+// Equity Total (a NaN spacer sits at index 2). Fixture mirrors the real sheet
+// retrieved 2026-06-08 (last weekly row 05/27/2026 → Equity Total −2214).
+
+const ICI_FIXTURE: Array<Array<string | number | null>> = [
+  [],
+  [],
+  [],
+  [],
+  ["Date", "Total LT MF and ETF flows", null, "Equity", null, null, null, null, null, "Hybrid"],
+  [],
+  // MONTHLY block — parser MUST skip these (no "weekly" marker yet, and these are
+  // month-end dates; we assert below that 41033 / 61739 never leak into the result).
+  ["01/31/2026 ", 104118, null, 7619, null, -36797],
+  ["02/28/2026 ", 151228, null, 41033, null, 2808],
+  ["04/30/2026 ", 102273, null, 61739, null, 37458],
+  [],
+  ["Estimated weekly fund flows"],
+  ["04/29/2026", 8467, null, -5066, null, -7347],
+  ["05/06/2026", 8874, null, -13008, null, -8168],
+  ["05/13/2026", 38884, null, 13274, null, 10826],
+  ["05/20/2026", 15195, null, -13268, null, -11744],
+  ["05/27/2026", 15641, null, -2214, null, -1575],
+  ["Note: Weekly fund flows are estimates based on reporting covering more than 98 percent…"],
+];
+
+test("parseIciWeeklyEquity reads the WEEKLY Equity-Total block, latest = -2214 (05/27/2026)", () => {
+  const series = parseIciWeeklyEquity(ICI_FIXTURE);
+  assert.equal(series.length, 5, `expected 5 weekly rows, got ${series.length}`);
+  const latest = series[series.length - 1];
+  assert.equal(latest.week, "2026-05-27");
+  assert.equal(latest.equity_m, -2214);
+  // Prior weeks, oldest→newest, match the validated sample values from the doc.
+  assert.deepEqual(series.map((s) => s.equity_m), [-5066, -13008, 13274, -13268, -2214]);
+});
+
+test("parseIciWeeklyEquity does NOT leak the monthly block into the weekly series", () => {
+  const series = parseIciWeeklyEquity(ICI_FIXTURE);
+  // 41033 and 61739 are MONTHLY values above the marker — they must never appear.
+  assert.ok(!series.some((s) => s.equity_m === 41033 || s.equity_m === 61739));
+  // Dates must all be the weekly rows, not the month-end rows.
+  assert.ok(!series.some((s) => s.week === "2026-01-31" || s.week === "2026-04-30"));
+});
+
+test("parseIciWeeklyEquity returns [] when the weekly marker is absent (no fabrication)", () => {
+  const noMarker = ICI_FIXTURE.filter((r) => String(r[0] ?? "").toLowerCase().indexOf("estimated weekly") === -1);
+  assert.deepEqual(parseIciWeeklyEquity(noMarker), []);
+  assert.deepEqual(parseIciWeeklyEquity([]), []);
+});
+
+test("qualitySpreadPp = DBAA − DAAA, 2dp; validated 6.06 − 5.53 = 0.53 pp", () => {
+  assert.equal(qualitySpreadPp(6.06, 5.53), 0.53);
+  // Rounds to 2 decimal places.
+  assert.equal(qualitySpreadPp(6.061, 5.534), 0.53);
+  // A wider, stressed quality gap.
+  assert.equal(qualitySpreadPp(7.5, 5.0), 2.5);
+  // Sign is preserved (BAA below AAA would be negative — never clamped).
+  assert.equal(qualitySpreadPp(5.0, 5.2), -0.2);
+});
+
+test("bdcDiscountPct = (priceToBook − 1) × 100, 1dp; validated ARCC 0.958 → −4.2%, FSK 0.565 → −43.5%", () => {
+  assert.equal(bdcDiscountPct(0.9581841450408818), -4.2);
+  assert.equal(bdcDiscountPct(0.5650183631247631), -43.5);
+  assert.equal(bdcDiscountPct(0.7657201396924798), -23.4);
+  // A premium-to-NAV (P/B > 1) is positive.
+  assert.equal(bdcDiscountPct(1.05), 5);
+  assert.equal(bdcDiscountPct(1.0), 0);
 });
 
 test("Timing: the MOVE realized-vol proxy does NOT enter the composite", () => {
