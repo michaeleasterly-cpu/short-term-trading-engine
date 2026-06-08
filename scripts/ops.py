@@ -3380,6 +3380,14 @@ async def _stage_backfill_sec_metadata(
     # ^ (ticker, document_type_primary, document_type_history,
     #    first_public_filing_date, last_filing_date,
     #    fiscal_year_end_month)
+    # SEC periodic-filings substrate writes (2026-06-07): one entry per
+    # CIK whose submissions carried >=1 routed periodic filing. Persisted
+    # to platform.sec_periodic_filings in the writes-apply transaction by
+    # tpcore.quality.sec_periodic_filings_store.write_periodic_filings
+    # (classification_id is filled by the table's BEFORE-INSERT trigger).
+    periodic_writes: list[tuple[str, str, list[Any]]] = []
+    # ^ (cik, ticker, list[PeriodicFiling])
+    periodic_stats = {"issuers_with_filings": 0, "rows_submitted": 0}
     if do_metadata:
         from tpcore.sec.companyfacts_adapter import SECCompanyFactsAdapter
 
@@ -3501,6 +3509,14 @@ async def _stage_backfill_sec_metadata(
                     meta.get("last_filing_date"),
                     meta.get("fiscal_year_end_month"),
                 ))
+                # SEC periodic-filings substrate — same in-memory
+                # submissions payload, no extra fetch. The canonical
+                # writer of platform.sec_periodic_filings.
+                periodic = meta.get("periodic_filings") or []
+                if periodic:
+                    periodic_writes.append((cik, ticker, periodic))
+                    periodic_stats["issuers_with_filings"] += 1
+                    periodic_stats["rows_submitted"] += len(periodic)
         bulk_stats = bulk_reader.stats() if bulk_reader is not None else None
         if bulk_reader is not None:
             bulk_reader.close()
@@ -3515,7 +3531,12 @@ async def _stage_backfill_sec_metadata(
     if not dry_run and (
         cik_writes or metadata_writes
         or fmp_cik_writes or fmp_divergence_events
+        or periodic_writes
     ):
+        from tpcore.quality.sec_periodic_filings_store import (
+            write_periodic_filings,
+        )
+
         async with pool.acquire() as conn:
             async with conn.transaction():
                 if cik_writes:
@@ -3607,12 +3628,26 @@ async def _stage_backfill_sec_metadata(
                         ],
                     )
                     metadata_stats["written"] = len(metadata_writes)
+                if periodic_writes:
+                    # Canonical writer of platform.sec_periodic_filings.
+                    # classification_id omitted — the BEFORE-INSERT
+                    # trigger fills it at as_of = filing_date. Chunked +
+                    # ON CONFLICT (cik, accession_number) DO NOTHING
+                    # (idempotent; filings immutable).
+                    periodic_rows_written = 0
+                    for _cik, _ticker, _periodic in periodic_writes:
+                        periodic_rows_written += await write_periodic_filings(
+                            conn, _periodic, cik=_cik, ticker=_ticker,
+                        )
+                    periodic_stats["rows_submitted"] = periodic_rows_written
         log.info(
             "ops.stage.backfill_sec_metadata.writes_committed",
             cik_written=cik_stats["written"],
             metadata_written=metadata_stats["written"],
             fmp_cik_written=fmp_stats["written"],
             fmp_divergence_events_written=fmp_stats["divergence_events_written"],
+            periodic_issuers=periodic_stats["issuers_with_filings"],
+            periodic_rows_submitted=periodic_stats["rows_submitted"],
         )
 
     coverage_after = await _snapshot()
@@ -3621,6 +3656,7 @@ async def _stage_backfill_sec_metadata(
         "cik": cik_stats,
         "metadata": {**metadata_stats, "failures": metadata_failures[:50]},
         "cik_fmp_fallback": fmp_stats,
+        "periodic_filings": periodic_stats,
         "coverage_before": coverage_before,
         "coverage_after": coverage_after,
         "dry_run": dry_run,

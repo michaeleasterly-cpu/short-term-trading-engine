@@ -496,6 +496,11 @@ get_submissions_cached  # unused method (tpcore/sec/companyfacts_adapter.py:424)
 # suite + future P2c capital-gate read). Static analysis sees only
 # the assignment.
 TERMINAL_LIFECYCLE_STATES  # unused variable (tpcore/quality/validation/checks/fundamentals_quarterly_completeness.py:581)
+# 2026-06-07: NON_OPERATING_ASSET_CLASSES is the public re-export of the
+# non-operating asset-class routing set (etf/etn/fund), same pattern as
+# TERMINAL_LIFECYCLE_STATES above — consumed by the check test suite +
+# downstream readers. Vulture sees only the assignment.
+NON_OPERATING_ASSET_CLASSES  # unused variable (tpcore/quality/validation/checks/fundamentals_quarterly_completeness.py:1106)
 # F1 failed-alpha ledger (2026-06-01) — Pydantic ``@field_validator``
 # decorated methods are called by the validation pipeline at construct
 # time, not invoked directly. ``RecordResult.record_id`` is read by

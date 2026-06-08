@@ -63,23 +63,33 @@ def test_repair_lookback_buffer_unchanged() -> None:
     assert fqc.REPAIR_LOOKBACK_BUFFER_DAYS == 14
 
 
-def test_filing_dates_sql_pinned_to_p1_shape() -> None:
-    """The P1 SQL joins ``sec_document_type_primary`` and removes the
-    ``asset_class = 'stock'`` predicate. Pinning the hash of the new
+def test_filing_dates_sql_pinned_to_p3_shape() -> None:
+    """P3 (2026-06-07): the universe SQL is now ANCHORED ON
+    ``ticker_classifications`` (LEFT JOIN fundamentals) + carries
+    ``classification_id`` (= ``tc.id``) + ``cik`` so the authoritative
+    SEC-reportDate set-difference (shared store ``compute_filing_gaps``)
+    can judge ``anchored=False`` issuers. Pinning the hash of the new
     SQL string is the canary against unintended drift atop the
-    cadence-routed rewrite.
+    set-difference rewrite.
 
-    If this hash regresses to the P0 value, P1 routing has been
-    reverted by accident — block the change loudly here."""
+    If this hash regresses to the P1 value, the universe lost its
+    classification_id / cik / LEFT-JOIN anchoring by accident — block
+    the change loudly here."""
     sha = hashlib.sha256(
         fqc._FILING_DATES_SQL.encode("utf-8"),
     ).hexdigest()
     assert sha == (
-        "15ead84d3ecb6416c4bbb952f11d1a4329c560f9aef8269dd1c39234e195e49c"
+        # 2026-06-07: re-pinned after the non-operating-entity routing
+        # change added ``tc.asset_class`` to the universe SELECT (so the
+        # check can route anchored=False etf/etn/fund issuers to
+        # excluded_non_filer). The classification_id / cik / LEFT-JOIN
+        # anchoring contract this sentinel guards is unchanged.
+        "db4cf04c78114439c621ca0179e3208c423bd9550dd3a526c2e0fcbde5c57be7"
     ), (
         "fundamentals_quarterly_completeness._FILING_DATES_SQL changed "
-        "from the P1 cadence-routed shape. If this is a deliberate next-"
-        "phase rewrite, update the pinned hash. If it's a revert, "
-        "restore the P1 routing (the SQL must SELECT "
-        "sec_document_type_primary from ticker_classifications)."
+        "from the P3 set-difference shape. If this is a deliberate next-"
+        "phase rewrite, update the pinned hash. If it's a revert, restore "
+        "the P3 universe (it must SELECT tc.id AS classification_id + "
+        "tc.cik and LEFT JOIN fundamentals_quarterly so anchored=False "
+        "issuers still appear)."
     )
