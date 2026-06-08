@@ -378,6 +378,19 @@ async def test_cache_integration_roundtrip() -> None:
                 """,
                 test_tkr14, test_ticker,
             )
+            # Identity-contract resolver (hard mode) reads ticker_history, NOT
+            # ticker_classifications. Seed a half-open SCD-2 window so the
+            # BEFORE INSERT trigger can resolve classification_id for the
+            # fundamentals row's period_end_date (NOT NULL on the child table).
+            await conn.execute(
+                """
+                INSERT INTO platform.ticker_history
+                    (classification_id, ticker, valid_from, valid_to)
+                VALUES ($1, $2, DATE '2000-01-01', NULL)
+                ON CONFLICT (classification_id, valid_from) DO NOTHING
+                """,
+                test_tkr14, test_ticker,
+            )
             await conn.execute(
                 "DELETE FROM platform.fundamentals_quarterly WHERE ticker=$1", test_ticker
             )
@@ -399,6 +412,12 @@ async def test_cache_integration_roundtrip() -> None:
         async with pool.acquire() as conn:
             await conn.execute(
                 "DELETE FROM platform.fundamentals_quarterly WHERE ticker=$1", test_ticker
+            )
+            # Tear down ticker_history BEFORE ticker_classifications
+            # (FK classification_id -> ticker_classifications(id), ON DELETE RESTRICT).
+            await conn.execute(
+                "DELETE FROM platform.ticker_history WHERE ticker=$1 AND classification_id=$2",
+                test_ticker, test_tkr14,
             )
             # Tear down the FK-required ticker_classifications row last
             # (after the child rows are gone — ON DELETE RESTRICT).

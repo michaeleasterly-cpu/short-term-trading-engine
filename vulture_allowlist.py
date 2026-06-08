@@ -567,3 +567,11 @@ _BulkReader.get_merged_submissions
 _BulkReader.stats
 _BulkReader.close
 _ensure_zip_cached
+
+# 2026-06-08: PriceBarSpan.n_bars is a validated field on a frozen Pydantic
+# model (Phase-A data-foundation spine). Same pattern as the
+# NON_OPERATING_ASSET_CLASSES / TERMINAL_LIFECYCLE_STATES entries above —
+# it documents the span has >= 1 bar (Field(ge=1)); the orchestrator
+# constructs the model and the field round-trips through it, but vulture
+# sees only the class-body annotation and flags it unused.
+n_bars  # unused variable (tpcore/identity/staging_spine_build.py:109)

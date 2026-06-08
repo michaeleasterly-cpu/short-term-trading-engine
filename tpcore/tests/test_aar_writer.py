@@ -88,12 +88,14 @@ class _FakePool:
 
 
 def _aar(
-    trade_id: str = "sigma-AAPL-001", exit_reason: ExitReason = ExitReason.TIER1_MID_BAND
+    trade_id: str = "sigma-AAPL-001",
+    exit_reason: ExitReason = ExitReason.TIER1_MID_BAND,
+    ticker: str = "AAPL",
 ) -> AfterActionReport:
     return AfterActionReport(
         engine="sigma",
         trade_id=trade_id,
-        ticker="AAPL",
+        ticker=ticker,
         entry_ts=datetime(2026, 5, 9, 13, 30, tzinfo=UTC),
         exit_ts=datetime(2026, 5, 9, 19, 55, tzinfo=UTC),
         entry_price=Decimal("180.00"),
@@ -164,17 +166,64 @@ async def test_write_aar_idempotent_on_conflict_returns_false() -> None:
 )
 async def test_aar_writer_integration_roundtrip() -> None:
     """Optional: real DB roundtrip — inserts, reads back, cleans up."""
+    from datetime import UTC
+    from datetime import datetime as _dt
+
     from tpcore.db import build_asyncpg_pool
+    from tpcore.identity.tkr14 import (
+        AssetClass,
+        DiscoverySource,
+        IPOVenue,
+        mint,
+    )
 
     pool = await build_asyncpg_pool(os.environ["DATABASE_URL"])
+    # Dedicated fixture ticker — NOT a real symbol — so the seeded identity
+    # window never collides with live ticker_history rows (the EXCLUDE
+    # constraint on ticker would RAISE, not skip, on an overlapping window).
+    test_ticker = "ZZZAAR"
+    # v2.2 P5: ticker_classifications.id is NOT NULL (TKR-14 stable identity).
+    test_tkr14 = mint(
+        country="US",
+        asset_class=AssetClass.STOCK,
+        ipo_venue=IPOVenue.OTHER,
+        discovery_source=DiscoverySource.OTHER,
+        cik=None,
+        legal_name="ZZZAAR Inc. (test fixture)",
+        now=_dt(2020, 1, 1, tzinfo=UTC),
+    )
+    writer = AARWriter(pool)
+    aar = _aar(trade_id="sigma-integration-AAR-001", ticker=test_ticker)
     try:
-        writer = AARWriter(pool)
-        aar = _aar(trade_id="sigma-integration-AAR-001")
         async with pool.acquire() as conn:
             await conn.execute(
                 "DELETE FROM platform.aar_events WHERE engine=$1 AND trade_id=$2",
                 aar.engine,
                 aar.trade_id,
+            )
+            # The identity-contract resolver (hard mode) reads ticker_history,
+            # NOT ticker_classifications. aar_events.classification_id is NOT
+            # NULL under the hard contract, and the BEFORE INSERT trigger
+            # resolves on recorded_at::date (= write-time now()). Seed BOTH a
+            # classifications row (FK target for ticker_history) AND an open
+            # SCD-2 window covering now so the resolver windows the write.
+            await conn.execute(
+                """
+                INSERT INTO platform.ticker_classifications
+                    (id, ticker, current_ticker, asset_class, source, lifetime_start)
+                VALUES ($1, $2, $2, 'stock', 'test_fixture', DATE '2000-01-01')
+                ON CONFLICT (id) DO NOTHING
+                """,
+                test_tkr14, test_ticker,
+            )
+            await conn.execute(
+                """
+                INSERT INTO platform.ticker_history
+                    (classification_id, ticker, valid_from, valid_to)
+                VALUES ($1, $2, DATE '2000-01-01', NULL)
+                ON CONFLICT (classification_id, valid_from) DO NOTHING
+                """,
+                test_tkr14, test_ticker,
             )
         # First call writes.
         assert await writer.write_aar(aar) is True
@@ -182,18 +231,39 @@ async def test_aar_writer_integration_roundtrip() -> None:
         assert await writer.write_aar(aar) is False
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT engine, trade_id, ticker FROM platform.aar_events WHERE engine=$1 AND trade_id=$2",
+                "SELECT engine, trade_id, ticker, classification_id "
+                "FROM platform.aar_events WHERE engine=$1 AND trade_id=$2",
                 aar.engine,
                 aar.trade_id,
             )
             assert row is not None
-            assert row["ticker"] == "AAPL"
+            assert row["ticker"] == test_ticker
+            # The hard contract populated classification_id from the window.
+            assert row["classification_id"] == test_tkr14
             await conn.execute(
                 "DELETE FROM platform.aar_events WHERE engine=$1 AND trade_id=$2",
                 aar.engine,
                 aar.trade_id,
             )
     finally:
+        # FK-safe teardown order: aar_events (already deleted in the happy
+        # path; repeat for the failure path) → ticker_history → then
+        # ticker_classifications (ON DELETE RESTRICT on both FKs).
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM platform.aar_events WHERE engine=$1 AND trade_id=$2",
+                aar.engine,
+                aar.trade_id,
+            )
+            await conn.execute(
+                "DELETE FROM platform.ticker_history WHERE ticker=$1 AND classification_id=$2",
+                test_ticker, test_tkr14,
+            )
+            await conn.execute(
+                "DELETE FROM platform.ticker_classifications "
+                "WHERE ticker=$1 AND source='test_fixture'",
+                test_ticker,
+            )
         await pool.close()
 
 
