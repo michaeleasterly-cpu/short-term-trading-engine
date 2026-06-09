@@ -400,10 +400,14 @@ function buildSections(d: MarketHealth): Section[] {
     // Names the exact measure (TLT 21-day realized volatility) + source; no "proxy"
     // hedge. Display-only — not fed into the composite.
     value: `${mv.proxy_value.toFixed(1)}%`,
-    tone: "ok",
+    // Rough read on TLT realized vol: calm in the high-single digits, ~15-20%+
+    // is an agitated bond market (the 2022-23 rate shock ran in that range).
+    tone: mv.proxy_value >= 20 ? "watch" : "ok",
     asOf: mv.as_of ?? undefined,
     explain:
-      "How much long-term US Treasuries have been moving lately — the 21-day realized volatility of the TLT 20+ Year Treasury ETF.",
+      mv.proxy_value >= 20
+        ? `At ${mv.proxy_value.toFixed(1)}%, long-term US Treasuries have been swinging a lot lately — an agitated bond market. This is the 21-day realized volatility of the TLT 20+ Year Treasury ETF (higher = bigger price swings).`
+        : `At ${mv.proxy_value.toFixed(1)}%, long-term US Treasuries have been relatively calm lately — this is the 21-day realized volatility of the TLT 20+ Year Treasury ETF, and readings around the high-single-digits are quiet (a stressed bond market runs ~15-20%+).`,
     detail: "The 21-day annualized realized (price) volatility of the TLT 20+ Year Treasury Bond ETF, in percent — a direct read on how much long-term US Treasuries have been moving lately. Computed from TLT end-of-day closes. Source: FMP (daily). Shown for context — not part of the composite score.",
   } : {
     // Fetch/parse failed — flag it, never fabricate.
@@ -421,10 +425,16 @@ function buildSections(d: MarketHealth): Section[] {
     key: "vvix",
     question: "How jumpy are the fear-gauge expectations themselves?",
     value: vv.value.toFixed(0),
-    // Level-only companion to VIX; tone neutral (no canonical public bands).
-    tone: "ok",
+    // Banded on VVIX's own history: ~85-90 long-run average; >120 = the vol market
+    // itself is jumpy (stress brewing under a calm VIX).
+    tone: vv.value >= 120 ? "stress" : vv.value >= 100 ? "watch" : "ok",
     asOf: vv.as_of ?? undefined,
-    explain: "VVIX measures how much the VIX itself is expected to move — the 'volatility of volatility', the companion gauge to the VIX. Spikes can flag stress brewing under a calm-looking VIX.",
+    explain:
+      vv.value >= 120
+        ? `At ${vv.value.toFixed(0)}, VVIX is elevated (its long-run average is ~85-90; above ~120 is high) — the options market expects the VIX itself to swing a lot, so a calm-looking VIX may be masking stress building underneath.`
+        : vv.value >= 100
+        ? `At ${vv.value.toFixed(0)}, VVIX is running somewhat above its ~85-90 norm — a little nervousness about the VIX itself, worth watching.`
+        : `At ${vv.value.toFixed(0)}, VVIX is around its normal range (long-run average ~85-90; above ~120 would flag the vol market getting jumpy) — the VIX's calm looks real, not artificially suppressed. It's the "volatility of volatility," the companion to the VIX.`,
     detail: "VVIX — the volatility-of-volatility index: expected volatility of the VIX over the next 30 days, derived from VIX options; the companion to the VIX. Sharp rises can precede equity-volatility spikes even when the VIX still looks tame. Long-run average is roughly 85-90. Source: CBOE's authoritative daily end-of-day VVIX history (cdn.cboe.com), a free public CSV — no quote-feed tier needed.",
   } : {
     key: "vvix",
