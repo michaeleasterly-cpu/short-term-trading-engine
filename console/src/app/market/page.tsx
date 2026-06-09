@@ -397,22 +397,22 @@ function buildSections(d: MarketHealth): Section[] {
   const moveCard: Card | null = !mv ? null : mv.available && mv.proxy_value != null ? {
     key: "move_index",
     question: "How nervous is the bond market?",
-    // Tone neutral: this is a realized-vol proxy with no canonical public bands,
-    // and it is explicitly not the MOVE stress signal.
-    value: `${mv.proxy_value.toFixed(1)}% (proxy)`,
+    // Names the exact measure (TLT 21-day realized volatility) + source; no "proxy"
+    // hedge. Display-only — not fed into the composite.
+    value: `${mv.proxy_value.toFixed(1)}%`,
     tone: "ok",
     asOf: mv.as_of ?? undefined,
     explain:
-      "A rough read on how much long-term US Treasuries have been moving lately. This is a PROXY — the 21-day realized volatility of the TLT Treasury ETF — not the actual MOVE index.",
-    detail: "TLT 21-day realized volatility (PROXY — NOT the ICE MOVE index). The real MOVE Index (Merrill Option Volatility Estimate) is the bond market's VIX: forward-looking IMPLIED volatility of US Treasury options, in basis points. It has no free authoritative machine-readable source on the current data tier, so instead we compute and clearly label a PROXY: the annualized 21-day REALIZED (backward-looking) price volatility of the TLT 20+yr Treasury ETF, in percent, from FMP end-of-day closes. Different methodology, different units — this is directionally related to bond-market turbulence but is NOT the MOVE index, and is deliberately kept out of the composite score. Source: TLT EOD via FMP. See docs/references/market-data-sources-alternates.md.",
+      "How much long-term US Treasuries have been moving lately — the 21-day realized volatility of the TLT 20+ Year Treasury ETF.",
+    detail: "The 21-day annualized realized (price) volatility of the TLT 20+ Year Treasury Bond ETF, in percent — a direct read on how much long-term US Treasuries have been moving lately. Computed from TLT end-of-day closes. Source: FMP (daily). Shown for context — not part of the composite score.",
   } : {
-    // Proxy couldn't be computed (FMP fetch/parse failed) — flag it, never fabricate.
+    // Fetch/parse failed — flag it, never fabricate.
     key: "move_index",
     question: "How nervous is the bond market?",
     value: "Unavailable",
     tone: "ok",
-    explain: "Our bond-market volatility proxy (TLT realized volatility) couldn't be computed right now, so we're showing no number rather than a made-up one.",
-    detail: "TLT 21-day realized volatility (PROXY — NOT the ICE MOVE index). The real MOVE index has no free authoritative source on the current data tier; this card normally shows a clearly-labeled realized-vol proxy computed from TLT end-of-day closes. The underlying data couldn't be fetched this run, so we flag it as unavailable rather than fabricate a reading.",
+    explain: "The bond-market volatility reading (TLT 21-day realized volatility) couldn't be computed right now, so we're showing no number rather than a made-up one.",
+    detail: "The 21-day annualized realized volatility of the TLT 20+ Year Treasury Bond ETF, in percent, computed from TLT end-of-day closes. Source: FMP (daily). The underlying data couldn't be fetched this run, so we flag it as unavailable rather than fabricate a reading.",
   };
 
   // 3. VVIX — vol-of-VIX. Companion to the VIX card.
@@ -448,15 +448,15 @@ function buildSections(d: MarketHealth): Section[] {
   } : {
     key: "index_concentration",
     question: "How top-heavy is the S&P 500?",
-    value: `${cc.pct.toFixed(1)}%${cc.is_proxy ? " (proxy)" : ""}`,
+    value: `${cc.pct.toFixed(1)}%`,
     tone: cc.pct > 35 ? "watch" : "ok",
     asOf: cc.as_of,
     explain:
       cc.pct > 35 ? "The biggest handful of stocks make up an extreme share of the index — concentration risk is high." :
                     "The largest stocks are a sizeable but not extreme share of the index.",
     detail: cc.is_proxy
-      ? `PROXY: combined market cap of the Magnificent Seven (AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA) ÷ S&P 500 total market cap, from the live quote feed (${cc.source}). This approximates top-10 concentration when a direct holdings source is unavailable, and is clearly labeled a proxy. Band: >35% is historically extreme.`
-      : `Combined weight of the 10 largest S&P 500 companies (${cc.source}). Above ~35% is historically extreme top-heaviness — a shrinking handful drives the index, which raises drawdown risk if those names wobble. Band: >35% extreme.`,
+      ? `Combined market cap of the Magnificent Seven (AAPL, MSFT, NVDA, AMZN, GOOGL, META, TSLA) ÷ S&P 500 total market cap. Source: ${cc.source} (live quote feed), used when a direct top-10 holdings file isn't reachable. Above ~35% is historically extreme top-heaviness. Band: >35% extreme.`
+      : `Combined weight of the 10 largest S&P 500 companies. Source: ${cc.source}. Above ~35% is historically extreme top-heaviness — a shrinking handful drives the index, which raises drawdown risk if those names wobble. Band: >35% extreme.`,
   };
 
   // 5. Equity fund flows — ICI weekly combined MF+ETF flows (DISPLAY-ONLY; not in
